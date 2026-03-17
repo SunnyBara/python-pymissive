@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pymissive"
-version = "1.0.3"
+version = "1.0.4"
 description = "Framework-agnostic messaging library for multi-channel communication."
 authors = [{ name = "Octolo", email = "dev@octolo.tech" }]
 readme = "README.md"
@@ -14,7 +14,7 @@ license-files = ["LICENSE"]
 keywords = ["messaging", "email", "sms", "missive", "multi-channel", "notification"]
 dependencies = [
   "clicommands>=0.1.0",
-  "providerkit>=0.1.0",
+  "providerkit>=1.1.1",
 ]
 
 classifiers = [
