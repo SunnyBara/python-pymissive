@@ -1,7 +1,6 @@
 from django_providerkit.models.service import ProviderServiceModelBase
 from django.utils.translation import gettext_lazy as _
 from django_providerkit.managers.service import ProviderServiceManager
-from django.db import models
 
 class MissiveServiceModel(ProviderServiceModelBase):
     """Virtual model for missive services."""

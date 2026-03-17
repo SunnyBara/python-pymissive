@@ -8,7 +8,7 @@ from .base import CommentTimestampedModel
 from .choices import (
     MissiveRecipientType,
     MissiveStatus,
-    event_to_status,
+    status_from_event_counts,
     MissiveSupport,
 )
 from ..managers.recipient import (
@@ -16,7 +16,7 @@ from ..managers.recipient import (
     MissiveRecipientEmailManager,
     MissiveRecipientPhoneManager,
     MissiveRecipientAddressManager,
-    MissiveRecipientNotificationManager,
+    MissiveRecipientApplicationManager,
 )
 
 
@@ -135,13 +135,14 @@ class MissiveRecipient(CommentTimestampedModel):
     def can_be_modified(self):
         return self.missive.can_be_modified
 
-    def set_last_status(self):
-        last_event = self.to_recipientevent.filter(event__isnull=False, recipient=self).order_by("-occurred_at").first()
-        if last_event:
-            status = event_to_status(last_event.event)
-            if status != self.status:
-                self.status = status
-                self.save(update_fields=["status"])
+    def set_status(self):
+        from ..models.event import MissiveEvent
+
+        success_count, processing_count, failed_count = MissiveEvent.objects.get_event_counts(recipient=self)
+        status = status_from_event_counts(success_count, processing_count, failed_count)
+        if status != self.status:
+            self.status = status
+            self.save(update_fields=["status"])
 
 class MissiveRecipientEmail(MissiveRecipient):
     objects = MissiveRecipientEmailManager()
@@ -185,15 +186,15 @@ class MissiveRecipientAddress(MissiveRecipient):
         super().save(*args, **kwargs)
 
 
-class MissiveRecipientNotification(MissiveRecipient):
-    objects = MissiveRecipientNotificationManager()
+class MissiveRecipientApplication(MissiveRecipient):
+    objects = MissiveRecipientApplicationManager()
 
     class Meta:
         proxy = True
-        verbose_name = _("Notification Recipient")
-        verbose_name_plural = _("Notification Recipients")
+        verbose_name = _("Application Recipient")
+        verbose_name_plural = _("Application Recipients")
 
     def save(self, *args, **kwargs):
         if not self.recipient_support:
-            self.recipient_support = MissiveSupport.NOTIFICATION
+            self.recipient_support = MissiveSupport.APPLICATION
         super().save(*args, **kwargs)

@@ -3,6 +3,9 @@
 from urllib.parse import urlparse
 
 from django.conf import settings
+from django.urls import reverse
+
+from .models.recipient import MissiveRecipient
 
 
 def recalculate_attachment_priorities(missive_id=None, campaign_id=None):
@@ -73,3 +76,23 @@ def get_base_url(domain=None, scheme=None, trailing_slash=True):
     else:
         base = f"{scheme}://{domain}"
     return f"{base}/" if trailing_slash else base
+
+
+def build_webhook_url(domain: str, provider_name: str, missive_type: str) -> str:
+    """Build full webhook URL from domain, provider and missive type."""
+    domain = (domain or "").rstrip("/")
+    path = reverse(
+        "django_pymissive:missive_webhook",
+        kwargs={"provider": provider_name, "missive_type": missive_type},
+    )
+    return f"{domain}{path}"
+
+
+def get_recipient(missive, recipient_data):
+    """Resolve recipient from missive and recipient_data dict."""
+    if not isinstance(recipient_data, dict):
+        return None
+    try:
+        return MissiveRecipient.objects.get(missive=missive, **recipient_data)
+    except MissiveRecipient.DoesNotExist:
+        return None

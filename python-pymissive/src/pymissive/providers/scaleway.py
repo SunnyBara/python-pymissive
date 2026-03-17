@@ -45,12 +45,11 @@ class ScalewayProvider(MissiveProviderBase):
         "email_deferred", "email_spam", "email_mailbox_not_found", "email_blocklisted",
     ]
     fields_associations = {
-        "email": "email_to",
         "occurred_at": ["Timestamp",],
         "event": "Message.type",
-        "description": ["reason", "trace.reason", "event", "trace.event", "status_details"],
+        "reason": ["reason", "trace.reason", "event", "trace.event", "status_details"],
         "external_id": ["message_id", "_message_id", "message-id", "MessageId"],
-        "email": ["email", "Message.email_to"],
+        "email": ["email", "Message.email_to", "email_to"],
         "sender_email": ["Message.email_from",],
     }
     events_association = {
@@ -278,7 +277,6 @@ class ScalewayProvider(MissiveProviderBase):
         data = response.json()
         data["external_id"] = data.get("message_id") or data.get("id")
         data["event"] = "sent"
-        data["user_action"] = True
         data["raw"] = dict(data)
         return data
 
@@ -294,16 +292,16 @@ class ScalewayProvider(MissiveProviderBase):
             wbh["url"] = self.get_subscription(sns, topic_arn).get("Endpoint")
         return webhooks
 
-    def get_webhook(self, domain_id: str, sns_arn: str):
+    def _get_webhook(self, domain_id: str, sns_arn: str):
         """Get a webhook."""
-        webhooks = self.get_webhooks()
+        webhooks = self.retrieve_webhooks()
         for wbh in webhooks:
             if wbh.get("domain_id") == domain_id and wbh.get("sns_arn") == sns_arn:
                 return wbh
         return None
 
     def get_or_create_webhook(self, domain_id: str, sns_arn: str):
-        webhook = self.get_webhook(domain_id, sns_arn)
+        webhook = self._get_webhook(domain_id, sns_arn)
         if webhook:
             return webhook
         url = self.ENDPOINTS["webhooks"].format(base_url=self._base_url, region=self._region)
@@ -322,7 +320,7 @@ class ScalewayProvider(MissiveProviderBase):
         response.raise_for_status()
         return response.json()        
 
-    def get_webhooks(self):
+    def retrieve_webhooks(self):
         """Get all webhooks."""
         url = self.ENDPOINTS["webhooks"].format(base_url=self._base_url, region=self._region)
         response = requests.get(
@@ -337,7 +335,7 @@ class ScalewayProvider(MissiveProviderBase):
         response = [wbh for wbh in response if wbh.get("project_id") == self._project_id]
         return self.merge_subscriptions_url(response)
 
-    def status_email(self, **kwargs) -> list[dict[str, Any]]:
+    def retrieve_email(self, **kwargs) -> list[dict[str, Any]]:
         """Get the status of an email via Scaleway API."""
         url = self.ENDPOINTS["email"].format(base_url=self._base_url, region=self._region) + "/"
         external_id = kwargs.get("external_id")
@@ -354,21 +352,21 @@ class ScalewayProvider(MissiveProviderBase):
                 "external_id": external_id,
                 "event": self.events_association.get(evt_type, evt_type),
                 "occurred_at": data.get("created_at") or data.get("email_sent_at") or data.get("email_queued_at"),
-                "description": evt_type,
+                "reason": evt_type,
                 "raw": data,
                 "email": data.get("email_to") or recipient.get("email"),
                 "recipients": [{"email": data.get("email_to") or recipient.get("email"), "external_id": recipient.get("external_id")}],
             })
         return events
 
-    def get_webhook_email(self, webhook_id: str):
+    def _retrieve_webhook_email(self, webhook_id: str):
         """Get a webhook."""
-        for wbh in self.get_webhooks():
+        for wbh in self.retrieve_webhooks():
             if "missive-webhook-email" in wbh.get("sns_arn"):
                 return wbh
         return None
 
-    def set_webhook_email(self, webhook_data: dict[str, Any]):
+    def create_webhook_email(self, webhook_data: dict[str, Any]):
         """Set a webhook email."""
         sns = self.sns_client_email
         topic = self.get_or_create_topic(sns, name="missive-webhook-email")
@@ -388,7 +386,7 @@ class ScalewayProvider(MissiveProviderBase):
         webhook_url = webhook_data.get("url")
         webhook_type = webhook_data.get("type")
         sns = getattr(self, f"sns_client_{webhook_type}")
-        webhook = getattr(self, f"get_webhook_{webhook_type}")(webhook_id)
+        webhook = getattr(self, f"_retrieve_webhook_{webhook_type}")(webhook_id)
         self.delete_subscription(sns, webhook, webhook_url)
 
     def _handle_webhook_email_confirm(self, payload: dict[str, Any]) -> None:

@@ -1,10 +1,25 @@
 from django.db import models
 
+from pymissive.config import SUCCESSFUL_EVENTS, FAILED_EVENTS, INFO_EVENTS
+
 
 class MissiveEventManager(models.Manager):
     """Manager for the MissiveEvent model."""
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        qs = qs.select_related("missive", "recipient")
-        return qs
+    def get_event_counts(self, missive=None, recipient=None):
+        """Return (success_count, processing_count, failed_count) from last event per recipient."""
+        qs = self.filter(event__isnull=False)
+        if missive is not None:
+            qs = qs.filter(missive=missive)
+        if recipient is not None:
+            qs = qs.filter(recipient=recipient)
+        qs = qs.order_by("recipient_id", "-occurred_at")
+        by_recipient = {}
+        for ev in qs:
+            key = ev.recipient_id
+            if key not in by_recipient:
+                by_recipient[key] = ev.event
+        success_count = sum(1 for e in by_recipient.values() if e in SUCCESSFUL_EVENTS)
+        processing_count = sum(1 for e in by_recipient.values() if e in INFO_EVENTS)
+        failed_count = sum(1 for e in by_recipient.values() if e in FAILED_EVENTS)
+        return success_count, processing_count, failed_count

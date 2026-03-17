@@ -9,6 +9,14 @@ def run_campaign(campaign_id):
     )
     scheduled.send_date = timezone.now()
     scheduled.save()
-    scheduled.run_campaign()
+    try:
+        scheduled.run_campaign()
+    finally:
+        # Clear processing flag so campaign can be restarted if needed
+        campaign = scheduled.campaign
+        metadata = dict(campaign.metadata or {})
+        metadata.pop("processing", None)
+        campaign.metadata = metadata
+        campaign.save(update_fields=["metadata"])
     scheduled.ended_at = timezone.now()
     scheduled.save()

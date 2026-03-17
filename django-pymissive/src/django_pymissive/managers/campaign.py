@@ -24,54 +24,34 @@ class MissiveCampaignManager(models.Manager):
             output_field=models.CharField(),
         )
 
+    def pct_expr(self, cnt):
+        return Coalesce(
+            Case(
+                When(count_recipient=0, then=Value(0.0)),
+                default=cnt * 100.0 / F("count_recipient"),
+                output_field=models.FloatField(),
+            ),
+            Value(0.0),
+        )
+
     def get_queryset(self):
         qs = super().get_queryset()
         qs = qs.annotate(
             last_send_date=self.last_scheduled_subquery("send_date"),
             last_ended_at=self.last_scheduled_subquery("ended_at"),
             count_missive=models.Count("to_missive", distinct=True),
-            count_missive_draft=models.Count("to_missive", filter=Q(to_missive__status=MissiveStatus.DRAFT), distinct=True),
+            count_recipient=models.Count("to_missive__to_missiverecipient", distinct=True),
             count_event=models.Count("to_missive__to_missiveevent", distinct=True),
-            count_recipient=models.Count(
-                "to_missive__to_missiverecipient", distinct=True
-            ),
-            count_recipient_failed=models.Count(
-                "to_missive__to_missiverecipient",
-                distinct=True,
-                filter=Q(to_missive__to_missiverecipient__status=MissiveStatus.FAILED),
-            ),
-            count_recipient_success=models.Count(
-                "to_missive__to_missiverecipient",
-                distinct=True,
-                filter=Q(to_missive__to_missiverecipient__status=MissiveStatus.SUCCESS),
-            ),
-            count_recipient_processing=models.Count(
-                "to_missive__to_missiverecipient",
-                distinct=True,
-                filter=Q(
-                    to_missive__to_missiverecipient__status=MissiveStatus.PROCESSING
-                ),
-            ),
-            # Fallback when Recipient.status is not updated (provider only updates Missive.status)
-            count_missive_success=models.Count(
-                "to_missive",
-                filter=Q(to_missive__status=MissiveStatus.SUCCESS),
-                distinct=True,
-            ),
-            count_missive_processing=models.Count(
-                "to_missive",
-                filter=Q(to_missive__status=MissiveStatus.PROCESSING),
-                distinct=True,
-            ),
-            count_missive_failed=models.Count(
-                "to_missive",
-                filter=Q(
-                    to_missive__status__in=[MissiveStatus.FAILED, MissiveStatus.ERROR]
-                ),
-                distinct=True,
-            ),
             count_related_object=models.Count("to_campaignrelatedobject", distinct=True),
             count_attachment=models.Count("to_campaigndocument", distinct=True),
+            **{
+                f"count_missive_{status.value.lower()}": models.Count(
+                    "to_missive",
+                    filter=Q(to_missive__status=status),
+                    distinct=True,
+                )
+                for status in MissiveStatus
+            },
             **{
                 f"count_type_{type_key}": models.Count(
                     "to_missive",
@@ -80,21 +60,19 @@ class MissiveCampaignManager(models.Manager):
                 )
                 for type_key in MISSIVE_TYPES
             },
+            **{
+                f"count_recipient_{status.value.lower()}": models.Count(
+                    "to_missive__to_missiverecipient",
+                    distinct=True,
+                    filter=Q(to_missive__to_missiverecipient__status=status),
+                )
+                for status in MissiveStatus
+            },
         )
-
-        def pct_expr(cnt):
-            return Coalesce(
-                Case(
-                    When(count_recipient=0, then=Value(0.0)),
-                    default=cnt * 100.0 / F("count_recipient"),
-                    output_field=models.FloatField(),
-                ),
-                Value(0.0),
-            )
-
         qs = qs.annotate(
-            pct_failed=pct_expr(F("count_recipient_failed")),
-            pct_success=pct_expr(F("count_recipient_success")),
-            pct_processing=pct_expr(F("count_recipient_processing")),
+            **{
+                f"pct_recipient_{status.value.lower()}": self.pct_expr(F(f"count_recipient_{status.value.lower()}"))
+                for status in MissiveStatus
+            },
         )
         return qs

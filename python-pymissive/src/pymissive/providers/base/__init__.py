@@ -10,22 +10,24 @@ from .notification import NotificationMixin
 from .postal import PostalMixin
 from .sms import SMSMixin
 from .voice_call import VoiceCallMixin
-
+import re
+import unicodedata
 from pymissive import config
 
 defaults_services = {
-    "get_webhooks": {
-        "fields": config.MISSIVE_WEBHOOK_FIELDS,
+    "retrieve_webhooks": {
+        "fields": config.WEBHOOK_FIELDS,
     },
 }
 
 
-for missive_type, type_desc in config.MISSIVE_TYPES.items():
-    fields_name = config.type_to_fields_mapping.get(missive_type, "MISSIVE_FIELDS_BASE")
-    fields = getattr(config, fields_name, config.MISSIVE_FIELDS_BASE)
-    
-    for service, service_desc in config.MISSIVE_SERVICES.items():
-        defaults_services[f"{service}_{missive_type}"] = {"fields": fields}
+for category, service_cfg in config.MISSIVE_SERVICES.items():
+    for service in service_cfg["services"].items():
+        for missive_type in config.MISSIVE_TYPES.keys():
+            defaults_services[f"{service[0]}_{missive_type}"] = {
+                "description": service[1],
+                "fields": service_cfg["config"]
+            }
 
 
 class MissiveProviderBase(
@@ -63,4 +65,15 @@ class MissiveProviderBase(
         return self.events_association.get(data.get("event"), "unknown")
 
     def get_normalize_webhook_id(self, data: dict) -> str:
-        return f"{self.name}-{data['id']}"
+        cfg = config.WEBHOOK_FIELDS.get("webhook_id")
+        source = cfg.get("source", self.fields_associations.get("webhook_id", "webhook_id"))
+        webhook_id = self._normalize_recursive(data, "webhook_id", source)
+        if webhook_id:
+            return f"{self.name}-{webhook_id}"
+        return None
+
+    def normalize_filename(self, name):
+        name = unicodedata.normalize("NFKD", name)
+        name = re.sub(r"\s+", "_", name)      # espaces -> _
+        name = re.sub(r"[^\w\.-]", "", name)  # enlève caractères spéciaux
+        return name

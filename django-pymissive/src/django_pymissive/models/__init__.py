@@ -1,12 +1,14 @@
 """Models for django_pymissive."""
 
 from .config import MissiveConfig
+from .billing import MissiveBilling
 from .attachment import (
     MissiveBaseAttachment,
     MissiveAttachment,
     MissiveVirtualAttachment,
     CampaignAttachment,
     CampaignVirtualAttachment,
+    MissiveProof,
 )
 from .campaign import MissiveCampaign, MissiveScheduledCampaign
 from .choices import (
@@ -27,10 +29,11 @@ from .recipient import (
     MissiveRecipientEmail,
     MissiveRecipientPhone,
     MissiveRecipientAddress,
-    MissiveRecipientNotification,
+    MissiveRecipientApplication,
 )
 
 __all__ = [
+    "MissiveBilling",
     "MissiveConfig",
     "CampaignAttachment",
     "CampaignVirtualAttachment",
@@ -48,7 +51,7 @@ __all__ = [
     "MissiveRecipientEmail",
     "MissiveRecipientPhone",
     "MissiveRecipientAddress",
-    "MissiveRecipientNotification",
+    "MissiveRecipientApplication",
     "MissiveType",
     "MissiveEventType",
     "MissiveStatus",

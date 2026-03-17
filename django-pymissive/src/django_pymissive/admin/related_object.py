@@ -19,7 +19,7 @@ class BaseRelatedObjectAdmin:
                 f"admin:{obj.content_type.app_label}_{obj.content_type.model}_change",
                 args=[obj.object_id],
             )
-        except Exception as e:
+        except Exception:
             return None
     
     @admin.display(description=_("Object URL Link"))

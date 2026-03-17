@@ -148,7 +148,7 @@ def _build_context_by_type(preview_type, instance, post_data=None):
     if pt in ("sms", "rcs"):
         return _build_sms_context(instance, post_data)
     if pt in ("postal", "postal_registered", "postal_signature", "lre", "lre_qualified"):
-        return _build_postal_context(instance)
+        return _build_lre_context(instance)
     return {}
 
 
@@ -176,8 +176,8 @@ def _geoaddress_lines(addr):
     return [str(addr)]
 
 
-def _build_postal_context(instance, post_data=None):
-    """Postal sender/recipient/delivery context."""
+def _build_lre_context(instance, post_data=None):
+    """LRE sender/recipient/delivery context."""
     sender = getattr(instance, "sender", None) or {}
     sender_address = sender.get("address") if isinstance(sender, dict) else None
     if not sender_address:
@@ -297,23 +297,23 @@ def _campaign_to_missive_preview(campaign, preview_type):
             sender=campaign.phone_sender or {},
             attachments_physical=attachments_physical,
         )
-    # postal
-    body_postal = ""
-    if hasattr(campaign, "body_postal_compiled"):
-        body_postal = campaign.body_postal_compiled()
-    if not body_postal:
-        body_postal = getattr(campaign, "body_postal", "") or ""
+    # address / LRE
+    first_document = ""
+    if hasattr(campaign, "first_document_compiled"):
+        first_document = campaign.first_document_compiled()
+    if not first_document:
+        first_document = getattr(campaign, "first_document", "") or ""
     sender = campaign.address_sender or {}
     return SimpleNamespace(
-        body_html=body_postal,
+        body_html=first_document,
         body_text="",
         sender=sender,
         sender_address=getattr(campaign, "sender_address", None),
         reply_to_address=getattr(campaign, "reply_to_address", None),
         reply_to_address_name=getattr(campaign, "reply_to_address_name", "") or "",
-        acknowledgement=getattr(campaign, "acknowledgement_postal", None),
-        delivery_mode=getattr(campaign, "delivery_mode_postal", None),
-        priority=getattr(campaign, "priority_postal", None),
+        acknowledgement=getattr(campaign, "acknowledgement_lre", None),
+        delivery_mode=getattr(campaign, "delivery_mode_lre", None),
+        priority=getattr(campaign, "priority_lre", None),
         attachments_physical=attachments_physical,
     )
 
@@ -441,7 +441,6 @@ class DownloadPDFView(DetailView):
             pdf_bytes = self.object.body_to_pdf()
             filename = f"missive-{self.object.pk}.pdf"
         else:
-            from ..pdf import body_to_pdf as default_body_to_pdf
             from django.conf import settings
             from django.utils.module_loading import import_string
 

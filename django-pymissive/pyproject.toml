@@ -43,8 +43,8 @@ dependencies = [
     "boto3>=1.28",
     "requests>=2.31",
     "requests>=2.31",  # La Poste, LRE (AR24)
-    "phonenumbers>=8.13",  # Validation numéros de téléphone
-    "email-validator>=2.1",  # Validation emails
+    "phonenumbers>=8.13",  # Phone number validation
+    "email-validator>=2.1",  # Email validation
 ]
 
 [project.optional-dependencies]

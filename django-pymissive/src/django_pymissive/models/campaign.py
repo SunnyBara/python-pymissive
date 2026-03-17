@@ -2,11 +2,9 @@
 
 import uuid
 
-from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.template import Context, Template
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from ..managers.campaign import MissiveCampaignManager
@@ -102,7 +100,7 @@ class MissiveCampaign(CommentTimestampedModel):
         help_text=_("Campaign body SMS"),
     )
 
-    # Postal
+    # Address / LRE
     sender_address_name = models.CharField(
         max_length=255,
         verbose_name=_("Sender address name"),
@@ -130,31 +128,31 @@ class MissiveCampaign(CommentTimestampedModel):
         verbose_name=_("Reply-To address"),
         help_text=_("Postal address for replies"),
     )
-    acknowledgement_postal = models.CharField(
+    acknowledgement_lre = models.CharField(
         max_length=50,
         choices=AcknowledgementLevel.choices,
         default=AcknowledgementLevel.BASIC_DELIVERY,
         verbose_name=_("Acknowledgement Level"),
         help_text=_("Desired acknowledgement level for delivery proof"),
     )
-    delivery_mode_postal = models.CharField(
+    delivery_mode_lre = models.CharField(
         max_length=50,
         choices=MissiveDeliveryMode.choices,
         default=MissiveDeliveryMode.NORMAL,
         verbose_name=_("Delivery Mode"),
-        help_text=_("Delivery mode (email, SMS, postal, etc.)"),
+        help_text=_("Delivery mode (economic, normal, premium, express)"),
     )
-    priority_postal = models.CharField(
+    priority_lre = models.CharField(
         max_length=20,
         choices=MissivePriority.choices,
         default=MissivePriority.NORMAL,
         verbose_name=_("Priority"),
         help_text=_("Priority level"),
     )
-    body_postal = RichTextField(
+    first_document = RichTextField(
         blank=True,
-        verbose_name=_("Body Postal"),
-        help_text=_("Campaign body Postal"),
+        verbose_name=_("First Document"),
+        help_text=_("First document content (HTML, converted to PDF for LRE)"),
     )
 
     additional_context = JSONField(
@@ -177,6 +175,8 @@ class MissiveCampaign(CommentTimestampedModel):
     )
 
     objects = MissiveCampaignManager()
+    # Plain manager for select_for_update (PostgreSQL rejects FOR UPDATE with GROUP BY)
+    objects_plain = models.Manager()
 
     class Meta:
         verbose_name = _("Campaign")
@@ -236,22 +236,19 @@ class MissiveCampaign(CommentTimestampedModel):
         """Render body HTML (email) with campaign context."""
         if not self.body_html:
             return ""
-        from django.template import Context, Template
         return Template(str(self.body_html)).render(Context(self.campaign_context()))
 
     def body_text_compiled(self):
         """Render body_text (email plain text) with campaign context."""
         if not self.body_text:
             return ""
-        from django.template import Context, Template
         return Template(str(self.body_text)).render(Context(self.campaign_context()))
 
-    def body_postal_compiled(self):
-        """Render body_postal with campaign context."""
-        if not self.body_postal:
+    def first_document_compiled(self):
+        """Render first_document with campaign context."""
+        if not self.first_document:
             return ""
-        from django.template import Context, Template
-        return Template(str(self.body_postal)).render(Context(self.campaign_context()))
+        return Template(str(self.first_document)).render(Context(self.campaign_context()))
 
     @property
     def attachments(self):
@@ -273,11 +270,18 @@ class MissiveCampaign(CommentTimestampedModel):
 
     def start_campaign(self):
         """Start the campaign."""
-        scheduled = self.to_missivecampaignsend.create(
-            campaign=self,
-            scheduled_send_date=timezone.now()
-        )
-        scheduled.start_scheduled_campaign()
+        with transaction.atomic():
+            campaign = MissiveCampaign.objects_plain.select_for_update().get(pk=self.pk)
+            if campaign.metadata.get("processing"):
+                from django.core.exceptions import ValidationError
+                raise ValidationError(_("Campaign is already being processed."))
+            campaign.metadata = {**dict(campaign.metadata), "processing": True}
+            campaign.save(update_fields=["metadata"])
+            scheduled = campaign.to_missivecampaignsend.create(
+                campaign=campaign,
+                scheduled_send_date=timezone.now()
+            )
+            scheduled.start_scheduled_campaign()
 
 
 class MissiveScheduledCampaign(CommentTimestampedModel):

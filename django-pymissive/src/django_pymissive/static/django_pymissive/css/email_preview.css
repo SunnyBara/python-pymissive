@@ -32,6 +32,38 @@
     white-space: break-spaces;
 }
 
+.email-plaintext-collapsible {
+    margin-bottom: 20px;
+}
+
+.email-plaintext-collapsible summary {
+    cursor: pointer;
+    font-weight: bold;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    list-style: none;
+}
+
+.email-plaintext-collapsible summary::-webkit-details-marker {
+    display: none;
+}
+
+.email-plaintext-collapsible summary::before {
+    content: "▶ ";
+    display: inline-block;
+    transition: transform 0.2s;
+}
+
+.email-plaintext-collapsible[open] summary::before {
+    transform: rotate(90deg);
+}
+
+.email-plaintext-collapsible .email-html {
+    margin-top: 0;
+}
+
 .empty {
     color: #999;
     font-style: italic;

@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-_version = f"(Django {django.get_version()}, pymissive {pymissive.__version__}/{django_pymissive.__version__})"
+_version = f"(Django {django.get_version()}, pymissive (py/dj) {pymissive.__version__}/{django_pymissive.__version__})"
 admin.site.site_header = f"Django Pymissive - Administration {_version}"
 admin.site.site_title = f"Django Pymissive Admin {_version}"
 admin.site.index_title = f"Welcome to Django Pymissive {_version}"

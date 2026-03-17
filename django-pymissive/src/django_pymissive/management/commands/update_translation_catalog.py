@@ -1,9 +1,13 @@
 """
 Generate translation_catalog.py from pymissive.config.
 
-Strings in pymissive.config are used via variables in django_pymissive.models.choices,
-so xgettext (makemessages) cannot extract them. This command generates a Python module
-with explicit _("literal") calls so makemessages can find them.
+Strings in pymissive.config (pymissive/config/__init__.py) are used via variables in
+django_pymissive.models.choices, so xgettext (makemessages) cannot extract them.
+This command generates a Python module with explicit _("literal") calls so makemessages
+can find them.
+
+Sources: MISSIVE_ACKNOWLEDGEMENT_LEVELS, MISSIVE_TYPES, SUCCESSFUL_EVENTS, INFO_EVENTS,
+FAILED_EVENTS, DELIVERY_MODES, PRIORITIES, GENERIC_SUPPORT.
 
 Run before makemessages:
   ./manage.py update_translation_catalog
@@ -20,12 +24,12 @@ def extract_strings_from_config() -> set[str]:
     from pymissive.config import (
         MISSIVE_ACKNOWLEDGEMENT_LEVELS,
         MISSIVE_TYPES,
-        MISSIVE_EVENT_SUCCESS,
-        MISSIVE_EVENT_INFO,
-        MISSIVE_EVENT_FAILED,
-        MISSIVE_DELIVERY_MODES,
-        MISSIVE_PRIORITIES,
-        MISSIVE_GENERIC_SUPPORT,
+        SUCCESSFUL_EVENTS,
+        INFO_EVENTS,
+        FAILED_EVENTS,
+        DELIVERY_MODES,
+        PRIORITIES,
+        GENERIC_SUPPORT,
     )
 
     strings: set[str] = set()
@@ -42,20 +46,26 @@ def extract_strings_from_config() -> set[str]:
     for v in MISSIVE_TYPES.values():
         strings.add(v)
 
-    for v in MISSIVE_EVENT_SUCCESS.values():
-        strings.add(v)
-    for v in MISSIVE_EVENT_INFO.values():
-        strings.add(v)
-    for v in MISSIVE_EVENT_FAILED.values():
-        strings.add(v)
+    def _add_event_strings(events_dict):
+        for v in events_dict.values():
+            if isinstance(v, tuple):
+                strings.add(v[0])
+                if len(v) > 1 and v[1]:
+                    strings.add(v[1])
+            else:
+                strings.add(v)
 
-    for k in MISSIVE_DELIVERY_MODES:
+    _add_event_strings(SUCCESSFUL_EVENTS)
+    _add_event_strings(INFO_EVENTS)
+    _add_event_strings(FAILED_EVENTS)
+
+    for k in DELIVERY_MODES:
         strings.add(k.capitalize())
 
-    for k in MISSIVE_PRIORITIES:
+    for k in PRIORITIES:
         strings.add(k.capitalize())
 
-    for k in MISSIVE_GENERIC_SUPPORT.keys():
+    for k in GENERIC_SUPPORT.keys():
         strings.add(k.capitalize())
 
     return strings
@@ -80,6 +90,8 @@ def generate_catalog_content(strings: set[str]) -> str:
     ]
 
     for s in sorted_strings:
+        if not s or not isinstance(s, str):
+            continue
         # Escape backslash and quote for Python string literal
         escaped = s.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'_("{escaped}")')
