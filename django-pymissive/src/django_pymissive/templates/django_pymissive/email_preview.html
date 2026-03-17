@@ -45,10 +45,12 @@
             </fieldset>
         {% endif %}
         {% if missive.body_text_compiled %}
-            <fieldset class="email-html">
-                <legend>Plain Text Content</legend>
-                <pre>{{ missive.body_text_compiled }}</pre>
-            </fieldset>
+            <details class="email-plaintext-collapsible">
+                <summary>Plain Text Content</summary>
+                <fieldset class="email-html">
+                    <pre>{{ missive.body_text_compiled }}</pre>
+                </fieldset>
+            </details>
         {% endif %}
         {% if not missive.body_html_compiled and not missive.body_text_compiled %}
             <p class="empty">{% trans 'No content' %}</p>

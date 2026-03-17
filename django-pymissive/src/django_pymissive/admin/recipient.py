@@ -9,7 +9,7 @@ from ..models.recipient import (
     MissiveRecipientEmail,
     MissiveRecipientPhone,
     MissiveRecipientAddress,
-    MissiveRecipientNotification,
+    MissiveRecipientApplication,
 )
 from ..models.choices import get_missive_style
 from django.utils.html import format_html
@@ -82,10 +82,10 @@ class MissiveRecipientAddressInline(admin.TabularInline):
         "delivered_at",
     ]
 
-class MissiveRecipientNotificationInline(admin.TabularInline):
-    """Inline for missive recipient notifications."""
+class MissiveRecipientApplicationInline(admin.TabularInline):
+    """Inline for missive recipient applications (push, branded)."""
 
-    model = MissiveRecipientNotification
+    model = MissiveRecipientApplication
     extra = 0
     readonly_fields = ["created_at", "updated_at", "sent_at", "delivered_at"]
     fields = [
@@ -161,7 +161,7 @@ class MissiveRecipientAdmin(AdminBoostModel):
         if obj.last_event:
             event_style = get_missive_style(obj.last_event)
             event = self.format_label(
-                obj.last_event_description, size="small", label_type=event_style
+                obj.last_event_reason, size="small", label_type=event_style
             )
             html = format_html("{} {}", html, event)
         return self.format_with_help_text(html, obj.last_event_date)

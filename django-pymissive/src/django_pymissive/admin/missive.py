@@ -1,6 +1,9 @@
 """Admin for Missive model."""
 
+import mimetypes
+
 from django.contrib import admin
+from django.http import HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
@@ -14,23 +17,25 @@ from phonenumber_field.modelfields import PhoneNumberField
 from phonenumber_field.formfields import PhoneNumberField as PhoneNumberFormField
 from phonenumber_field.formfields import SplitPhoneNumberField
 from urllib.parse import urlencode
-from ..models.missive import Missive, MissiveMessage, MissiveHistory
+from ..models.missive import Missive
 from ..models.recipient import MissiveRecipient
 from .recipient import (
     MissiveRecipientEmailInline,
     MissiveRecipientPhoneInline,
     MissiveRecipientAddressInline,
-    MissiveRecipientNotificationInline,
+    MissiveRecipientApplicationInline,
 )
 from .attachment import (
     MissiveAttachmentInline,
     MissiveVirtualAttachmentInline,
+    MissiveProofInline,
 )
 from ..models.attachment import MissiveBaseAttachment
 from ..utils import recalculate_attachment_priorities
 from .event import MissiveEventInline
+from .billing import MissiveBillingInline
 from .related_object import MissiveRelatedObjectInline
-from ..models.choices import get_missive_style, MissiveStatus, MissiveThreadType
+from ..models.choices import get_missive_style, MissiveStatus, MissiveThreadType, MissiveSupport
 from django_boosted import admin_boost_view, admin_boost_action
 
 class IsBillableListFilter(admin.SimpleListFilter):
@@ -165,11 +170,13 @@ class MissiveAdmin(AdminBoostModel):
         MissiveRecipientEmailInline,
         MissiveRecipientPhoneInline,
         MissiveRecipientAddressInline,
-        MissiveRecipientNotificationInline,
+        MissiveRecipientApplicationInline,
         MissiveAttachmentInline,
         MissiveVirtualAttachmentInline,
+        MissiveBillingInline,
         MissiveEventInline,
         MissiveRelatedObjectInline,
+        MissiveProofInline,
     ]
 
     def save_formset(self, request, form, formset, change):
@@ -219,21 +226,23 @@ class MissiveAdmin(AdminBoostModel):
     recipient_display.short_description = _("Recipient")
 
     def billing_display(self, obj):
-        tpl = self.boolean_icon_html(obj.is_billed)
         if obj.total_billed_amount is not None:
-            tpl += "&nbsp;"
             label_type = "success" if obj.is_billed else "warning"
-            tpl += self.format_label(f"{obj.total_billed_amount:.3f}", size="small", label_type=label_type)
+            return self.format_label(f"{obj.total_billed_amount:.3f}", size="small", label_type=label_type)
         if obj.total_billing_amount is not None:
-            tpl += "&nbsp;"
             label_type = "info" if obj.is_billed else "danger"
-            tpl += self.format_label(f"{obj.total_billing_amount:.3f}", size="small", label_type=label_type)
-        return mark_safe(tpl)
+            return self.format_label(f"{obj.total_billing_amount:.3f}", size="small", label_type=label_type)
+        return "-"
+
+    billing_display.short_description = _("Billing")
 
     def sender_display(self, obj):
         sender = obj.get_sender()
         name = sender["name"] or ""
-        target = sender[obj.missive_support.lower()] or ""
+        if obj.missive_support == MissiveSupport.ADDRESS:
+            target = obj.sender_address or ""
+        else:
+            target = sender[obj.missive_support.lower()] or ""
         text = name or target or _("No sender")
         return self.format_with_help_text(text, target) if target else text
 
@@ -265,14 +274,7 @@ class MissiveAdmin(AdminBoostModel):
         status_html = self.format_label(
             obj.get_status_display(), size="small", label_type=status_style
         )
-        if obj.last_event:
-            event_style = get_missive_style(obj.last_event)
-            event_html = self.format_label(
-                obj.last_event_display, size="small", label_type=event_style
-            )
-            html = format_html("{} {} {}", priority_html, status_html, event_html)
-        else:
-            html = format_html("{} {}", priority_html, status_html)
+        html = format_html("{} {}", priority_html, status_html)
         return self.format_with_help_text(html, obj.last_event_date)
 
     status_display.short_description = _("Status / Last Event Date")
@@ -288,9 +290,8 @@ class MissiveAdmin(AdminBoostModel):
             size="small",
             label_type="secondary",
         )
-        thread_type = self.format_label(obj.get_thread_type_display(), size="small", label_type=get_missive_style(obj.thread_type))
-        html = format_html("{} {} {}", thread_type, message, history)
-        return self.format_with_help_text(html, str(obj.thread_id))
+        html = format_html("{} {}", message, history)
+        return self.format_with_help_text(html, obj.get_thread_type_display())
 
     thread_display.short_description = _("Message(s)/History(s)/Thread")
 
@@ -390,6 +391,7 @@ class MissiveAdmin(AdminBoostModel):
         self.add_to_fieldset(
             _("Billing"),
             [
+                "billing_display",
                 "total_billed_amount_display",
                 "total_billing_amount_display",
                 "total_estimate_amount_display",
@@ -443,7 +445,7 @@ class MissiveAdmin(AdminBoostModel):
         return self.is_not_cancelled(obj)
 
     def has_prepare_missive_permission(self, request, obj=None):
-        return self.is_draft(obj) and self.provider_has_service(obj, "prepare") and not obj.external_id
+        return self.is_draft(obj) and self.provider_has_service(obj, "create") and not obj.external_id
 
     @admin_boost_action("prepare_missive", _("Prepare"))
     def handle_prepare_missive(self, request, object_id):
@@ -451,16 +453,6 @@ class MissiveAdmin(AdminBoostModel):
         obj = self.get_object(request, object_id)
         obj.prepare_missive()
         messages.success(request, _("Missive prepared successfully."))
-
-    def has_update_missive_permission(self, request, obj=None):
-        return self.is_draft(obj) and self.provider_has_service(obj, "update")
-
-    @admin_boost_action("update_missive", _("Update"))
-    def handle_update_missive(self, request, object_id):
-        object_id = unquote(object_id)
-        obj = self.get_object(request, object_id)
-        obj.update_missive()
-        messages.success(request, _("Missive updated successfully."))
 
     def has_resend_missive_permission(self, request, obj=None):
         return self.is_not_cancelled(obj) and obj.can_resend() and not self.is_draft(obj)
@@ -474,9 +466,10 @@ class MissiveAdmin(AdminBoostModel):
     @admin_boost_view("confirm", _("Resend"), hidden=True)
     def resend_missive(self, request, obj, confirmed=False):
         if not confirmed:
-            return {"confirm": _("Are you sure you want to resend this missive?")}  
-        obj.resend_missive()
+            return {"confirm": _("Are you sure you want to resend this missive?")}
+        new_missive = obj.resend_missive()
         messages.success(request, _("Missive resent successfully."))
+        return redirect(reverse("admin:django_pymissive_missive_change", args=[new_missive.pk]))
 
     def has_send_missive_permission(self, request, obj=None):
         return self.is_draft(obj) and obj.can_send()
@@ -505,14 +498,14 @@ class MissiveAdmin(AdminBoostModel):
         obj.cancel_missive()
         messages.success(request, _("Missive cancelled successfully."))
 
-    def has_status_missive_permission(self, request, obj=None):
-        return self.is_not_cancelled(obj) and self.provider_has_service(obj, "status") and obj.external_id
+    def has_retrieve_missive_permission(self, request, obj=None):
+        return self.is_not_cancelled(obj) and self.provider_has_service(obj, "retrieve") and obj.external_id
 
-    @admin_boost_action("status_missive", _("Status"))
-    def handle_status_missive(self, request, object_id):
+    @admin_boost_action("retrieve_missive", _("Status"))
+    def handle_retrieve_missive(self, request, object_id):
         object_id = unquote(object_id)
         obj = self.get_object(request, object_id)
-        obj.status_missive()
+        obj.retrieve_missive()
         messages.success(request, _("Missive status updated successfully."))
 
     def has_duplicate_missive_permission(self, request, obj=None):
@@ -546,7 +539,7 @@ class MissiveAdmin(AdminBoostModel):
         }
         return url + "?" + urlencode(data)
 
-    @admin_boost_view("redirect", _("Show message"))
+    @admin_boost_view("redirect", _("Show conversation"))
     def handle_message(self, request, obj):
         url = reverse("admin:django_pymissive_missive_changelist")
         data = {
@@ -554,4 +547,74 @@ class MissiveAdmin(AdminBoostModel):
             "thread_id": obj.thread_id,
         }
         return url + "?" + urlencode(data)
-    
+
+    @admin_boost_view("message", _("Show proofs"))
+    def handle_proofs(self, request, obj):
+        """Display proofs as admin list (items: filename, url)."""
+        proofs = obj.get_proofs()
+        url_download = reverse("admin:django_pymissive_missive_download_proof", args=[obj.pk])
+        html_links = [
+            format_html(
+                '<div><a href="{}" target="_blank">{}</a></div>',
+                f"{url_download}?filename={proof['filename']}&url={proof['url']}",
+                proof["filename"],
+            )
+            for proof in proofs
+        ]
+        return {"message": mark_safe(" ".join(str(link) for link in html_links))}
+
+    @admin_boost_view("message", _("Download proofs"), hidden=True)
+    def download_proof(self, request, obj):
+        filename = request.GET.get("filename")
+        url = request.GET.get("url")
+        if not filename or not url:
+            return HttpResponse(_("Missing filename or url"), status=400)
+        content = obj.download_proof(**{
+            "filename": filename,
+            "url": url,
+            "data": obj.get_serialized_data(attachments=False),
+        })
+        if content is None:
+            messages.warning(request, _("Proof not available"))
+            return redirect(reverse("admin:django_pymissive_missive_change", args=[obj.pk]))
+        content_type, _ = mimetypes.guess_type(filename)
+        response = HttpResponse(content, content_type=content_type or "application/octet-stream")
+        response["Content-Disposition"] = 'attachment; filename="%s"' % filename.replace('"', '\\"')
+        return response
+
+    @admin_boost_view("redirect", _("Save proofs"))
+    def save_proofs(self, request, obj):
+        from django.core.files.base import ContentFile
+        from ..models.choices import MissiveAttachmentType
+        proofs = obj.get_proofs()
+        for proof in proofs:
+            filename = proof["filename"]
+            url = proof["url"]
+            content = obj.download_proof(**{
+                "filename": filename,
+                "url": url,
+                "data": obj.get_serialized_data(attachments=False),
+            })
+            if content is None:
+                continue
+            obj.to_missiveattachment.get_or_create(
+                attachment_type=MissiveAttachmentType.PROOF,
+                metadata__proof_filename=filename,
+                defaults={
+                    "attachment_file": ContentFile(content, name=filename),
+                    "metadata": {"proof_filename": filename, "proof_url": url},
+                },
+            )
+        messages.success(request, _("Proofs saved successfully."))
+        return redirect(reverse("admin:django_pymissive_missive_change", args=[obj.pk]))
+
+    def has_get_billings_permission(self, request, obj=None):
+        return obj and obj.can_billings()
+
+    @admin_boost_action("get_billings", _("Get billings"))
+    def handle_get_billings(self, request, object_id):
+        object_id = unquote(object_id)
+        obj = self.get_object(request, object_id)
+        obj.get_billings()
+        messages.success(request, _("Billings retrieved successfully."))
+        return redirect(reverse("admin:django_pymissive_missive_change", args=[obj.pk]))

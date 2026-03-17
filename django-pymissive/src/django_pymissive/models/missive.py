@@ -1,8 +1,8 @@
 """Main Missive model for multi-channel sending."""
 
 import uuid
-from typing import Optional
 from django.db import transaction
+from django.utils import timezone
 from django.core.exceptions import ValidationError, ObjectDoesNotExist
 from django.db import models
 from django.utils.translation import gettext_lazy as _
@@ -20,7 +20,7 @@ from .choices import (
     MissiveEventType,
     MissivePriority,
     MissiveStatus,
-    event_to_status,
+    status_from_event_counts,
     MissiveType,
     get_missive_support_from_type,
     MissiveRecipientType,
@@ -35,7 +35,7 @@ from ..managers import (
 )
 from ..models.base import CommentTimestampedModel
 from ..fields import RichTextField, JSONField
-from ..utils import get_base_url
+from ..utils import get_base_url, build_webhook_url, get_default_domain, get_default_scheme
 from django.core import signing
 from django.core.files.base import ContentFile
 
@@ -57,7 +57,7 @@ PREVIEW_TPL_HTML = """<a href='{url}' target='_blank' rel='noopener' style='{sty
 
 
 class Missive(CommentTimestampedModel):
-    """Multi-channel missive model (email, SMS, postal, WhatsApp, etc.)."""
+    """Multi-channel missive model (email, SMS, address/LRE, application, etc.)."""
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -104,7 +104,7 @@ class Missive(CommentTimestampedModel):
         max_length=50,
         choices=MissiveSupport.choices,
         verbose_name=_("Missive Support"),
-        help_text=_("Support for the missive (email, SMS, postal, etc.)"),
+        help_text=_("Support for the missive (email, phone, address, application)"),
         editable=False,
     )
     brand_name = models.CharField(
@@ -118,7 +118,7 @@ class Missive(CommentTimestampedModel):
         max_length=50,
         choices=MissiveType.choices,
         verbose_name=_("Missive Type"),
-        help_text=_("Type of missive (email, SMS, postal, etc.)"),
+        help_text=_("Type of missive (email, sms, lre, ere, etc.)"),
     )
     acknowledgement = models.CharField(
         max_length=50,
@@ -134,7 +134,7 @@ class Missive(CommentTimestampedModel):
         blank=True,
         null=True,
         verbose_name=_("Delivery Mode"),
-        help_text=_("Delivery mode (email, SMS, postal, etc.)"),
+        help_text=_("Delivery mode (economic, normal, premium, express)"),
     )
     priority = models.CharField(
         max_length=20,
@@ -156,7 +156,7 @@ class Missive(CommentTimestampedModel):
         blank=True,
         null=True,
         verbose_name=_("Body HTML"),
-        help_text=_("HTML message body (email) or rich content (postal)"),
+        help_text=_("HTML message body (email) or rich content (LRE)"),
     )
     body_text = models.TextField(
         blank=True,
@@ -316,8 +316,8 @@ class Missive(CommentTimestampedModel):
     def last_event_display(self):
         return dict(MissiveEventType.choices).get(self.last_event, self.last_event)
 
-    # Campaign uses _postal for address support, _email for email, _phone for phone
-    _SUPPORT_TO_CAMPAIGN_SUFFIX = {"address": "postal", "email": "email", "phone": "phone"}
+    # Campaign suffix by support: address->lre, email->email, phone->phone
+    _SUPPORT_TO_CAMPAIGN_SUFFIX = {"address": "lre", "email": "email", "phone": "phone"}
 
     def get_locally_or_campaign_value(self, field, fallback=None):
         """Return value from self, else from campaign (field or field_{suffix})."""
@@ -382,14 +382,19 @@ class Missive(CommentTimestampedModel):
             "priority", fallback=MissivePriority.NORMAL
         )
 
+    def get_webhook_url(self):
+        scheme = get_default_scheme()
+        domain = get_default_domain()
+        base = f"{scheme}://{(domain or '').strip().lstrip('/')}"
+        return build_webhook_url(base, self.provider._provider.name, self.missive_type)
+
     def is_serializable_field(self, field):
         return (not field.is_relation
                 and not field.many_to_many
                 and not field.name.startswith("_"))
 
-    def get_serialized_data(self):
+    def get_serialized_data(self, attachments=True):
         """Serialize missive data to a dictionary for provider calls."""
-        from .recipient import MissiveRecipient
 
         missive_data = {}
         for field in self._meta.get_fields():
@@ -413,7 +418,9 @@ class Missive(CommentTimestampedModel):
             ]
         missive_data["sender"] = self.get_sender()
         missive_data["reply_to"] = self.get_reply_to()
-        missive_data["attachments"] = self.get_serialized_attachments(linked=False)
+        if attachments:
+            missive_data["attachments"] = self.get_serialized_attachments(linked=False)
+        missive_data["webhook_url"] = self.get_webhook_url()
         missive_data.update(self.additional_config)
         return missive_data
 
@@ -452,8 +459,8 @@ class Missive(CommentTimestampedModel):
         body = self.get_locally_or_campaign_value("body_sms", self.body_text)
         return self.check_recipients() and bool(body and body.strip())
 
-    def check_postal(self):
-        body = self.get_locally_or_campaign_value("body_postal", self.body_html)
+    def check_lre(self):
+        body = self.get_locally_or_campaign_value("first_document", self.body_html)
         return self.check_recipients() and bool(body and body.strip())
 
     @property
@@ -490,20 +497,17 @@ class Missive(CommentTimestampedModel):
 
     def body_to_pdf(self):
         """Convert the body to PDF."""
-        from django.utils.module_loading import import_string
-        from django.conf import settings
         pdg_generator = getattr(settings, "MISSIVEPDF_GENERATOR", "django_pymissive.pdf.body_to_pdf")
         pdf = import_string(pdg_generator)(self)
         return pdf
 
-    def generate_postal_first_page(self):
-        """Generate first page PDF from body and save as attachment with priority 1."""
+    def generate_first_document(self):
+        """Generate first document PDF from first_document/body_html and save as attachment."""
         from ..models.attachment import MissiveBaseAttachment
 
         pdf_bytes = self.body_to_pdf()
-        filename = f"first-page-{self.thread_id}.pdf"
-        # FileField stores full path; filter by path containing the filename
-        existing = self.to_missiveattachment.filter(attachment_file__icontains=f"first-page-{self.thread_id}").first()
+        filename = f"first-document-{self.thread_id}.pdf"
+        existing = self.to_missiveattachment.filter(attachment_file__icontains=f"first-document-{self.thread_id}").first()
         if existing:
             existing.attachment_file.delete(save=False)
             existing.attachment_file.save(filename, ContentFile(pdf_bytes), save=True)
@@ -547,11 +551,11 @@ class Missive(CommentTimestampedModel):
         return Template(tpl).render(Context(context))
 
     @property
-    def body_postal_compiled(self):
-        """Compile the body postal of the missive."""
+    def first_document_compiled(self):
+        """Compile first_document (campaign) or fallback to body_html when no campaign."""
         context = self.missive_context()
-        tpl = self.get_locally_or_campaign_value("body_postal", self.body_html)
-        return Template(tpl).render(Context(context))
+        tpl = self.get_locally_or_campaign_value("first_document", self.body_html) or ""
+        return Template(str(tpl)).render(Context(context))
 
     #########################################################
     # Attachments
@@ -593,14 +597,15 @@ class Missive(CommentTimestampedModel):
 
     @property
     def attachments(self):
-        from .attachment import MissiveAttachment
+        """Attachments from missive and campaign (when campaign_id is set)."""
+        from .attachment import MissiveBaseAttachment
         q_filter = models.Q(attachment_type=MissiveAttachmentType.ATTACHMENT) | models.Q(
             attachment_type=MissiveAttachmentType.VIRTUAL_ATTACHMENT
         )
         parent_q = models.Q(missive=self)
         if self.campaign_id:
             parent_q |= models.Q(campaign=self.campaign)
-        return MissiveAttachment.objects.filter(parent_q, q_filter)
+        return MissiveBaseAttachment.objects.filter(parent_q, q_filter)
 
     @property
     def attachments_physical(self):
@@ -608,8 +613,8 @@ class Missive(CommentTimestampedModel):
 
     def get_serialized_attachments(self, linked=False):
         """Get the attachments of the missive."""
-        if not linked and self.missive_type == MissiveType.POSTAL:
-            self.generate_postal_first_page()
+        if not linked and self.missive_type == MissiveType.LRE:
+            self.generate_first_document()
         return [a.get_serialized_attachment(linked=linked) for a in self.attachments.filter(linked=linked)]
 
     #########################################################
@@ -618,18 +623,20 @@ class Missive(CommentTimestampedModel):
 
     @transaction.atomic
     def resend_missive(self):
-        """Resend the missive."""
+        """Resend the missive: original becomes HISTORY, new duplicate is MISSIVE and gets sent."""
         if not self.can_resend():
             raise ValidationError(_("Missive cannot be resend"))
-        new_missive = self.duplicate_missive(thread_type=MissiveThreadType.HISTORY, thread_id=self.thread_id)
+        self.thread_type = MissiveThreadType.HISTORY
+        self.save(update_fields=["thread_type"])
+        new_missive = self.duplicate_missive(thread_type=MissiveThreadType.MISSIVE, thread_id=self.thread_id)
         new_missive.send_missive()
         return new_missive
 
     def duplicate_attachments(self, new_missive, source_missive):
         """Copy attachments from source_missive to new_missive (excl. first-page)."""
-        first_page = f"first-page-{source_missive.thread_id}"
+        first_doc_prefix = f"first-document-{source_missive.thread_id}"
         for attachment in source_missive.to_missiveattachment.exclude(
-            attachment_file__icontains=first_page
+            attachment_file__icontains=first_doc_prefix
         ):
             attachment.pk = None
             attachment.id = None
@@ -677,9 +684,9 @@ class Missive(CommentTimestampedModel):
             att.save(update_fields=["external_id"])
 
     def prepare_missive(self):
-        """Prepare the missive for sending."""
-        response = self.call_provider_service("prepare", **self.get_serialized_data())
-        response["user_action"] = True
+        """Prepare the missive for sending (calls provider create)."""
+        response = self.call_provider_service("create", **self.get_serialized_data())
+        response["client_initiated"] = True
         self.external_id = response.get("external_id")
         self.save(update_fields=["external_id"])
         self._update_recipients(response.get("recipients", []))
@@ -687,7 +694,7 @@ class Missive(CommentTimestampedModel):
     def update_missive(self):
         """Update the missive."""
         response = self.call_provider_service("update", **self.get_serialized_data())
-        response["user_action"] = True
+        response["client_initiated"] = True
         self._update_recipients(response.get("recipients", []))
 
     def send_missive(self):
@@ -695,57 +702,108 @@ class Missive(CommentTimestampedModel):
         if not self.can_send():
             raise ValidationError(_("Missive cannot be sent"))
         self.status = MissiveStatus.PROCESSING
+        occurred_at = timezone.now()
         response = self.call_provider_service("send", **self.get_serialized_data())
-        response["user_action"] = True
+        response["client_initiated"] = True
+        if response.get("recipients"):
+            self._update_recipients(response.get("recipients"))
+        if response.get("attachments"):
+            self._update_attachments(response.get("attachments"))
         self._update_attachments(response.get("attachments", []))
         self.external_id = response.get("external_id")
         if self.external_id:
             self.external_id = response.get("external_id")
             self.save(update_fields=["external_id", "status"])
-            self.handle_events([response])
+            self.to_missiveevent.create(
+                event=MissiveEventType.REQUEST,
+                trace=response,
+                client_initiated=True,
+                occurred_at=occurred_at,
+            )
+            events = response.get("events")
+            if events:
+                self.handle_events(events)
         else:
-            self.to_missiveevent.create(event=MissiveStatus.FAILED, trace=response.get("raw", {}), user_action=True)
+            self.to_missiveevent.create(
+                event=MissiveEventType.ERROR,
+                trace=response,
+                client_initiated=True,
+                occurred_at=occurred_at,
+            )
 
     def handle_events(self, events: list | dict):
-        from ..task.events import handle_events
-        handle_events(events)
+        from ..events import handle_events
+        handle_events(events, self.provider, self.missive_type)
 
     def cancel_missive(self):
         """Cancel the missive."""
-        response = self.call_provider_service("cancel", **self.get_serialized_data())
+        response = self.call_provider_service("cancel", **self.get_serialized_data(attachments=False))
         if response.get("code") in [200, 204, 404]:
             self.status = MissiveStatus.CANCELLED
             self.save(update_fields=["status"])
 
-    def status_missive(self):
-        """Get the status of the missive."""
-        from ..task.events import handle_events
-        response = self.call_provider_service("status", **self.get_serialized_data())
-        self.handle_events(response)
+    def retrieve_missive(self):
+        """Retrieve the status of the missive from the provider."""
+        response = self.call_provider_service("retrieve", **self.get_serialized_data(attachments=False))
+        events = response.get("events")
+        if events:
+            self.handle_events(events)
 
-    def set_last_status(self):
-        last_event = self.to_missiveevent.filter(event__isnull=False).order_by("-occurred_at").first()
-        if last_event:
-            status = event_to_status(last_event.event)
-            if status != self.status:
-                self.status = status
-                self.save(update_fields=["status"])
+    def set_status(self):
+        from ..models.event import MissiveEvent
+
+        success_count, processing_count, failed_count = MissiveEvent.objects.get_event_counts(missive=self)
+        status = status_from_event_counts(success_count, processing_count, failed_count)
+        if status != self.status:
+            self.status = status
+            self.save(update_fields=["status"])
 
     #########################################################
     # Billing
     #########################################################
 
-    def billing_amount_missive(self):
-        """Get the billing amount of the missive."""
-        self.call_provider_service("billing_amount", **self.get_serialized_data())
+    def can_billings(self):
+        return self.has_service("get_billings") and self.external_id
 
-    def estimate_amount_missive(self):
-        """Get the estimate amount of the missive."""
-        self.call_provider_service("estimate_amount", **self.get_serialized_data())
+    def get_billings(self):
+        """Get the billings of the missive."""
+        if self.can_billings():
+            from ..billings import handle_billings
+            handle_billings(**self.get_serialized_data(attachments=False))
 
     def set_billed(self):
-        """Set the billed status of the missive."""
-        self.to_missiveevent.filter(billing_amount__gt=0).update(is_billed=True)
+        """Set the billed status on billing records for this missive."""
+        self.to_missivebilling.filter(billing_amount__gt=0).update(is_billed=True)
+
+    #########################################################
+    # Proofs
+    #########################################################
+
+    def can_proofs(self):
+        """Return True if provider supports get_proofs for this missive type."""
+        return self
+
+    def get_proofs(self):
+        """Get proofs (filename, url) from provider. Returns [] if not supported."""
+        if not self.can_proofs():
+            return []
+        provider = self.provider._provider
+        service_name = f"retrieve_proofs_{self.missive_type}"
+        if not hasattr(provider, service_name):
+            return []
+        return provider.call_service_formatted(
+            service_name, **self.get_serialized_data()
+        )
+
+    def download_proof(self, **kwargs):
+        """Download the proof from the provider."""
+        if not self.can_proofs():
+            return None
+        provider = self.provider._provider
+        service_name = f"download_proof_{self.missive_type}"
+        if not hasattr(provider, service_name):
+            return None
+        return provider.call_service_formatted(service_name, output_format="raw", **kwargs)
 
     #########################################################
     # Recipients
@@ -807,8 +865,8 @@ class Missive(CommentTimestampedModel):
                 "body_text": _("Body text is required (in missive or campaign)"),
             })
 
-    def clean_support_postal(self):
-        """Clean the missive for postal support."""
+    def clean_support_address(self):
+        """Clean the missive for address support."""
         has_body_missive = (self.body_html or self.to_missiveattachment.all().exists())
         has_body_campaign = (self.campaign and self.campaign.to_campaigndocument.exists())
         if not has_body_missive and not has_body_campaign:

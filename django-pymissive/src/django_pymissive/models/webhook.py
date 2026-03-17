@@ -1,32 +1,18 @@
 """Webhook model for storing webhook configurations."""
 
 from django.db import models
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from .choices import MissiveType, WebhookScheme
 
-from pymissive.config import MISSIVE_WEBHOOK_FIELDS
-from ..utils import get_default_domain, get_default_scheme
-from django_providerkit import fields_associations
+from pymissive.config import WEBHOOK_FIELDS
+from ..utils import get_default_domain, get_default_scheme, build_webhook_url
+from django_providerkit import fields_associations, ProviderField
+from ..managers.webhook import MissiveWebhookManager
 
 
 def get_default_webhook_scheme():
     """Return default scheme for webhook (serializable for migrations)."""
     return WebhookScheme.HTTPS if get_default_scheme() == "https" else WebhookScheme.HTTP
-from ..managers.webhook import MissiveWebhookManager
-
-from django_providerkit import ProviderField
-
-
-def build_webhook_url(domain: str, provider_name: str, missive_type: str) -> str:
-    """Build full webhook URL from domain, provider and missive type."""
-    domain = (domain or "").rstrip("/")
-    path = reverse(
-        "django_pymissive:missive_webhook",
-        kwargs={"provider": provider_name, "missive_type": missive_type},
-    )
-    return f"{domain}{path}"
-
 
 class MissiveWebhook(models.Model):
     """Webhook configuration for missive events."""
@@ -97,10 +83,11 @@ class MissiveWebhook(models.Model):
         return ""
 
     def get_webhook_data(self):
-        return {"id": self.id, "type": self.type, "url": self._get_url()}
+        url = getattr(self, "url", None) or self._get_url()
+        return {"id": self.id, "webhook_id": self.webhook_id, "type": self.type, "url": url}
 
     def new_webhook(self):
-        service = f"set_webhook_{self.type}"
+        service = f"create_webhook_{self.type}"
         provider = self.get_provider()
         if hasattr(provider._provider, service):
             return provider._provider.call_service(
@@ -129,7 +116,7 @@ class MissiveWebhook(models.Model):
             )
 
 
-for field, cfg in MISSIVE_WEBHOOK_FIELDS.items():
+for field, cfg in WEBHOOK_FIELDS.items():
     if field not in ("webhook_id", "scheme", "domain"):
         field_cfg = {
             "verbose_name": cfg["label"],

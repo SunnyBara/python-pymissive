@@ -8,11 +8,13 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from django.utils.text import format_lazy
+from django.contrib import messages
+from django.shortcuts import redirect
 from phonenumber_field.modelfields import PhoneNumberField
 from phonenumber_field.formfields import PhoneNumberField as PhoneNumberFormField
 from phonenumber_field.formfields import SplitPhoneNumberField
 from django_boosted import AdminBoostModel
-from django_boosted.decorators import admin_boost_view
+from django_boosted.decorators import admin_boost_view, admin_boost_action
 
 from pymissive.config import MISSIVE_TYPES
 
@@ -82,7 +84,7 @@ class MissiveCampaignAdmin(AdminBoostModel):
     readonly_fields = [
         "buttons_show_and_preview_email",
         "buttons_show_and_preview_sms",
-        "buttons_show_and_preview_postal",
+        "buttons_show_and_preview_lre",
         "created_at",
         "updated_at",
     ]
@@ -156,11 +158,11 @@ class MissiveCampaignAdmin(AdminBoostModel):
                 "sender_address",
                 "reply_to_address_name",
                 "reply_to_address",
-                "acknowledgement_postal",
-                "delivery_mode_postal",
-                "priority_postal",
-                "body_postal",
-                "buttons_show_and_preview_postal",
+                "acknowledgement_lre",
+                "delivery_mode_lre",
+                "priority_lre",
+                "first_document",
+                "buttons_show_and_preview_lre",
             ],
         )
         self.add_to_fieldset(
@@ -211,10 +213,10 @@ class MissiveCampaignAdmin(AdminBoostModel):
 
     buttons_show_and_preview_sms.short_description = _("SMS: Show and Preview")
 
-    def buttons_show_and_preview_postal(self, obj):
+    def buttons_show_and_preview_lre(self, obj):
         return self._preview_buttons(obj, "postal")
 
-    buttons_show_and_preview_postal.short_description = _("Postal: Show and Preview")
+    buttons_show_and_preview_lre.short_description = _("LRE: Show and Preview")
 
     def subject_display(self, obj):
         missive_recipients = [
@@ -236,7 +238,7 @@ class MissiveCampaignAdmin(AdminBoostModel):
                 labels.append(
                     self.format_label(f"{count} {type_label}", size="small", label_type="primary")
                 )
-        tpl = mark_safe(" ".join(str(l) for l in labels)) if labels else "-"
+        tpl = mark_safe(" ".join(str(label) for label in labels)) if labels else "-"
         return self.format_with_help_text(tpl, " | ".join(str(s) for s in related_attachment))
 
 
@@ -250,17 +252,17 @@ class MissiveCampaignAdmin(AdminBoostModel):
         ]
         rates = [
             self.format_label(
-                format_lazy(_("{}% failed"), f"{obj.pct_failed:.0f}"),
+                format_lazy(_("{}% failed"), f"{getattr(obj, 'pct_recipient_failed', 0):.0f}"),
                 size="small",
                 label_type="danger",
             ),
             self.format_label(
-                format_lazy(_("{}% success"), f"{obj.pct_success:.0f}"),
+                format_lazy(_("{}% success"), f"{getattr(obj, 'pct_recipient_success', 0):.0f}"),
                 size="small",
                 label_type="success",
             ),
             self.format_label(
-                format_lazy(_("{}% processing"), f"{obj.pct_processing:.0f}"),
+                format_lazy(_("{}% processing"), f"{getattr(obj, 'pct_recipient_processing', 0):.0f}"),
                 size="small",
                 label_type="warning",
             ),
@@ -281,11 +283,22 @@ class MissiveCampaignAdmin(AdminBoostModel):
 
     last_ended_at_display.short_description = _("Last ended at")
 
+    def has_start_campaign_permission(self, request, obj=None):
+        return obj and obj.pk
+
+    @admin_boost_action("start_campaign", _("Start campaign"))
     def handle_start_campaign(self, request, object_id):
         object_id = unquote(object_id)
         obj = self.get_object(request, object_id)
+        return redirect(reverse("admin:django_pymissive_missivecampaign_start_campaign", args=[obj.pk]))
+
+    @admin_boost_view("confirm", _("Start campaign"), hidden=True)
+    def start_campaign(self, request, obj, confirmed=False):
+        if not confirmed:
+            return {"confirm": _("Are you sure you want to start this campaign?")}
         obj.start_campaign()
-        self.message_user(request, _("Campaign started successfully."))
+        messages.success(request, _("Campaign started successfully."))
+        return redirect(reverse("admin:django_pymissive_missivecampaign_changelist"), args=[obj.pk])
 
     @admin_boost_view("redirect", _("Show missives"))
     def handle_show_missives(self, request, obj):

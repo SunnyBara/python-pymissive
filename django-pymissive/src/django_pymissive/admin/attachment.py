@@ -10,7 +10,8 @@ from ..models.attachment import (
     MissiveAttachment,
     MissiveVirtualAttachment,
     CampaignAttachment,
-    CampaignVirtualAttachment
+    CampaignVirtualAttachment,
+    MissiveProof,
 )
 
 
@@ -128,4 +129,16 @@ class CampaignVirtualAttachmentInline(admin.TabularInline):
         "external_id",
         "page_count",
         "linked",
+    ]
+
+class MissiveProofInline(admin.TabularInline):
+    """Inline for missive proofs."""
+
+    model = MissiveProof
+    extra = 0
+    fields = [
+        "attachment_file",
+    ]
+    readonly_fields = [
+        "attachment_file",
     ]

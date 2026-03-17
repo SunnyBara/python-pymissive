@@ -1,16 +1,14 @@
 """Webhook view for receiving provider events."""
 
+import logging
 
 from django.http import HttpResponse
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-
-
 from django.views.generic import DetailView
 
-from ..task.events import handle_events
+from ..events import handle_events
 from ..models.provider import MissiveProviderModel
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +32,8 @@ class WebhookView(DetailView):
     def handle_webhook(self, request, *args, **kwargs):
         provider = self.get_object()
         missive_type = kwargs.get("missive_type")
-        handler = f"handle_webhook_{missive_type.lower()}"
-        normalized = provider._provider.call_service_formatted(handler, payload=request.body)
-        is_valid = (
-            normalized is not None
-            and isinstance(normalized, dict)
-            and "error" not in normalized
-        )
-        if is_valid:
-            try:
-                missive = handle_events([normalized], provider.name)
-                if missive:
-                    missive.set_last_status()
-            except Exception as e:
-                logger.error(f"Error handling webhook: {e}", exc_info=True)
+        try:
+            handle_events(request.body, provider=provider, missive_type=missive_type)
+        except Exception as e:
+            logger.error(f"Error handling webhook: {e}", exc_info=True)
         return HttpResponse(status=200)

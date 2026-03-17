@@ -2,7 +2,6 @@
 
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from django_providerkit import ProviderField
 
 from .base import CommentTimestampedModel
 from .choices import MissiveEventType
@@ -36,14 +35,6 @@ class MissiveEvent(CommentTimestampedModel):
         editable=False,
     )
 
-    provider = ProviderField(
-        package_name="pymissive",
-        blank=True,
-        null=True,
-        verbose_name=_("Provider"),
-        help_text=_("Provider that emitted this event"),
-    )
-
     event = models.CharField(
         max_length=50,
         choices=MissiveEventType.choices,
@@ -53,10 +44,10 @@ class MissiveEvent(CommentTimestampedModel):
         help_text=_("Event type (sent, delivered, read, failed, etc.)"),
     )
 
-    description = models.TextField(
+    reason = models.TextField(
         blank=True,
-        verbose_name=_("Description"),
-        help_text=_("Description or details about this event"),
+        verbose_name=_("Reason"),
+        help_text=_("Reason or details about this event (provider-specific)"),
     )
 
     metadata = JSONField(
@@ -73,10 +64,13 @@ class MissiveEvent(CommentTimestampedModel):
         help_text=_("Raw trace data (webhook payload, API response, etc.)"),
     )
 
-    user_action = models.BooleanField(
+    client_initiated = models.BooleanField(
         default=False,
-        verbose_name=_("User Action"),
-        help_text=_("Indicates if the event was triggered by a user action"),
+        verbose_name=_("Client Initiated"),
+        help_text=_(
+            "True if the event was initiated by django_pymissive (send, resend, cancel, batch, etc.), "
+            "False if received from a provider webhook."
+        ),
     )
 
     occurred_at = models.DateTimeField(
@@ -84,60 +78,42 @@ class MissiveEvent(CommentTimestampedModel):
         help_text=_("When this event occurred"),
     )
 
-    is_billed = models.BooleanField(
-        default=False,
-        verbose_name=_("Billed"),
-        help_text=_("Indicates if the missive has been billed"),
-    )
-    billing_amount = models.DecimalField(
-        max_digits=10,
-        decimal_places=3,
-        null=True,
-        blank=True,
-        verbose_name=_("Billing Amount"),
-        help_text=_("Amount billed for the missive"),
-    )
-    estimate_amount = models.DecimalField(
-        max_digits=10,
-        decimal_places=3,
-        null=True,
-        blank=True,
-        verbose_name=_("Estimate Amount"),
-        help_text=_("Estimated amount for the missive"),
-    )
-
     objects = MissiveEventManager()
 
     class Meta:
         verbose_name = _("Event")
         verbose_name_plural = _("Events")
-        ordering = ["-occurred_at"]
+        ordering = ["-occurred_at",]
+
+    def get_reason(self):
+        """Return human-readable reason for event from config, or empty string."""
+        return MissiveEventType.get_description(self.event)
 
     def save(self, *args, **kwargs):
         if not self.occurred_at:
             self.occurred_at = timezone.now()
+        if not self.reason and self.event:
+            self.reason = self.get_reason()
         super().save(*args, **kwargs)
 
     def __str__(self):
         missive_ref = self.missive_id or "?"
         return f"{missive_ref} - {self.event} ({self.occurred_at})"
 
-    def set_billed(self):
-        """Get billing amount and estimate amount."""
-        if self.billing_amount is not None:
-            self.is_billed = True
-        self.save(update_fields=["is_billed"])
+    def can_replay(self):
+        """Return True if the event can be replayed."""
+        return (self.missive_id and not self.client_initiated)
 
     def replay(self):
-        """Replay the event."""
+        """Replay the event. Uses trace["raw"] (normalized event) stored at creation."""
         if not self.missive_id:
             raise ValueError("Cannot replay event without associated missive")
-        provider = self.missive.provider._provider
-        config_name = f"status_{self.missive.missive_type}".lower()
-        config = provider._default_services_cfg.get(config_name, {})
-        event = self.missive.provider._provider.normalize(data=self.trace, config=config)
-        if event:
-            event["pk"] = self.pk
-            self.missive.handle_events([event])
-            self.event = event["event"]
-            self.save(update_fields=["event"])
+
+
+
+        event = self.trace.get("raw") or self.trace
+        if not isinstance(event, dict):
+            raise ValueError("No replayable event in trace")
+        event = dict(event)
+        event["pk"] = self.pk
+        self.missive.handle_events([event])

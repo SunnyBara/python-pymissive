@@ -7,7 +7,6 @@ from datetime import date
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
 from django.core.files.storage import Storage, default_storage
 from django.db import models
 from django.urls import reverse
@@ -17,20 +16,27 @@ from django.utils.translation import gettext_lazy as _
 
 from .base import CommentTimestampedModel
 from .choices import MissiveAttachmentType
+from ..utils import get_base_url
 from ..managers.attachment import (
     MissiveBaseAttachmentManager,
     MissiveAttachmentManager,
     MissiveVirtualAttachmentManager,
     CampaignAttachmentManager,
     CampaignVirtualAttachmentManager,
+    MissiveProofManager,
 )
 from ..fields import JSONField
 
 def _attachment_upload_to(instance, filename):
     """Return upload path based on attachment class."""
+    upload_to = getattr(settings, 'PYMISSIVE_ATTACHMENT_UPLOAD_TO', None)
+    if upload_to:
+        return import_string(upload_to)(instance, filename)
     today = date.today()
-    prefix = "campaignattachment" if instance.campaign else "missiveattachment"
-    return f"missive/{prefix}/{today:%Y/%m/%d}/{filename}"
+    prefix = "campaign" if instance.campaign else "missive"
+    attachment_type = instance.attachment_type.lower()
+    uid = str(instance.pk)
+    return f"pymissive/{prefix}/{attachment_type}/{uid}/{today:%Y/%m/%d}/{filename}"
 
 
 def _get_attachment_file_storage():
@@ -144,7 +150,7 @@ class MissiveBaseAttachment(CommentTimestampedModel):
     )
 
     attachment_object_arguments = JSONField(
-        default=dict({"method": "get_attachment", "args": [], "kwargs": {}}),
+        default=dict({"method": "retrieve_attachment", "args": [], "kwargs": {}}),
         blank=True,
         verbose_name=_("Attachment Object Arguments"),
         help_text=_("Arguments to pass to the file method (as dict for **kwargs)"),
@@ -242,12 +248,13 @@ class MissiveBaseAttachment(CommentTimestampedModel):
         name = getattr(attachment, "name", None) or "unnamed_attachment"
         scope = "campaign" if self.campaign_id else "missive"
         url = reverse("django_pymissive:missive_attachment_download", args=[scope, self.id])
+        base_url = get_base_url(trailing_slash=False)
         data = {
             "id": str(self.id),
             "external_id": self.external_id,
             "priority": self.priority,
             "name": os.path.basename(name),
-            "url": self.missive.base_url + url,
+            "url": base_url + url,
         }
         if linked or ignore_content:
             return data
@@ -331,3 +338,13 @@ class CampaignVirtualAttachment(MissiveBaseAttachment):
         proxy = True
         verbose_name = _("Campaign Virtual Attachment")
         verbose_name_plural = _("Campaign Virtual Attachments")
+
+class MissiveProof(MissiveBaseAttachment):
+    """Proof for missives."""
+
+    objects = MissiveProofManager()
+
+    class Meta:
+        proxy = True
+        verbose_name = _("Proof")
+        verbose_name_plural = _("Proofs")

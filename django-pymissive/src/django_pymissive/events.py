@@ -1,0 +1,96 @@
+"""Event handling: normalize via provider.handle_webhook_{missive_type}, then process each event."""
+
+from datetime import timezone as dt_timezone
+
+from django.conf import settings
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+
+from .models.choices import MissiveEventType
+from .models.event import MissiveEvent
+from .models.missive import Missive
+from .utils import get_recipient
+
+
+def _can_save_untreated(provider_name):
+    CONF_SAVE_UNTREATED = getattr(settings, "PYMISSIVE_SAVE_UNTREATED_EVENTS", False)
+    if CONF_SAVE_UNTREATED is True:
+        return True
+    if isinstance(CONF_SAVE_UNTREATED, list):
+        return provider_name in CONF_SAVE_UNTREATED
+    return False
+
+
+def _get_occurred_at(occurred_at):
+    if isinstance(occurred_at, str):
+        occurred_at = parse_datetime(occurred_at.replace("Z", "+00:00"))
+    if occurred_at is not None and timezone.is_naive(occurred_at):
+        return timezone.make_aware(occurred_at, dt_timezone.utc)
+    return occurred_at or timezone.now()
+
+
+def _save_untreated(event, provider):
+    provider_name = getattr(provider, "name", None) or str(provider)
+    if not _can_save_untreated(provider_name):
+        return
+    trace = {"event": event, "provider": provider_name}
+    MissiveEvent.objects.create(
+        missive=None,
+        recipient=None,
+        event=MissiveEventType.ERROR,
+        reason=event.get("reason", "Could not process event"),
+        occurred_at=_get_occurred_at(event.get("occurred_at")),
+        trace=trace,
+    )
+
+
+def _process_event(event, missive):
+    occurred_at = _get_occurred_at(event.get("occurred_at"))
+    lookup = {
+        "missive": missive,
+        "event": event.get("event"),
+        "occurred_at": occurred_at,
+    }
+    defaults = {
+        "reason": event.get("reason", "No reason provided"),
+        "trace": event.get("raw") or {},
+    }
+    recipient = None
+    if event.get("recipient"):
+        recipient = get_recipient(missive, event.get("recipient"))
+        lookup["recipient"] = recipient
+
+    raw = event.get("raw") or {}
+    if "pk" in raw:
+        defaults = {
+            **defaults,
+            **lookup,
+        }
+        lookup = {"pk": raw.get("pk")}
+    MissiveEvent.objects.update_or_create(defaults=defaults, **lookup)
+    if recipient:
+        recipient.set_status()
+    missive.set_status()
+
+
+def handle_event(event, provider, missive_type: str) -> Missive | None:
+    try:
+        external_id = event.get("external_id")
+        missive = Missive.objects.get(external_id=external_id)
+        _process_event(event, missive)
+    except Missive.DoesNotExist:
+        _save_untreated(event, provider)
+    return None
+
+
+def handle_events(events, provider, missive_type: str) -> Missive | None:
+    """Normalize via provider.handle_webhook_{missive_type}, then process each event."""
+    events_normalized = provider._provider.call_service_formatted(
+        f"handle_webhook_{missive_type}", payload=events
+    )
+    if events_normalized:
+        if isinstance(events_normalized, dict):
+            events_normalized = [events_normalized]
+        for event in events_normalized:
+            handle_event(event, provider, missive_type)
+    return None

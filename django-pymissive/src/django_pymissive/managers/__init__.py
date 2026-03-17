@@ -14,6 +14,7 @@ from .attachment import (
     MissiveVirtualAttachmentManager,
     CampaignAttachmentManager,
     CampaignVirtualAttachmentManager,
+    MissiveProofManager,
 )
 from .related_object import (
     MissiveRelatedObjectManager,
@@ -24,12 +25,14 @@ from .recipient import (
     MissiveRecipientEmailManager,
     MissiveRecipientPhoneManager,
     MissiveRecipientAddressManager,
-    MissiveRecipientNotificationManager,
+    MissiveRecipientApplicationManager,
 )
 
 __all__ = [
     "ProviderManager",
     "MissiveManager",
+    "MissiveMessageManager",
+    "MissiveHistoryManager",
     "MissiveCampaignManager",
     "MissiveEventManager",
     "MissiveBaseAttachmentManager",
@@ -43,6 +46,6 @@ __all__ = [
     "MissiveRecipientEmailManager",
     "MissiveRecipientPhoneManager",
     "MissiveRecipientAddressManager",
-    "MissiveRecipientNotificationManager",
+    "MissiveRecipientApplicationManager",
 
 ]

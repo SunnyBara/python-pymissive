@@ -62,3 +62,13 @@ class CampaignVirtualAttachmentManager(MissiveBaseAttachmentManager):
             missive__isnull=True,
         )
         return qs
+
+class MissiveProofManager(MissiveBaseAttachmentManager):
+    """Manager for the MissiveProof model."""
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        qs = qs.filter(
+            attachment_type=MissiveAttachmentType.PROOF,
+        )
+        return qs

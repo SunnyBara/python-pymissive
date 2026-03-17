@@ -30,7 +30,7 @@ class MissiveRecipientManager(models.Manager):
                 "to_recipientevent",
             ),
             last_event=self.last_event_subquery(field="event"),
-            last_event_description=self.last_event_subquery(field="description"),
+            last_event_reason=self.last_event_subquery(field="reason"),
             last_event_date=Coalesce(
                 Max("to_recipientevent__occurred_at"), F("created_at")
             ),
@@ -62,10 +62,10 @@ class MissiveRecipientAddressManager(models.Manager):
         qs = qs.filter(recipient_support=MissiveSupport.ADDRESS)
         return qs
 
-class MissiveRecipientNotificationManager(models.Manager):
-    """Manager for the MissiveRecipientNotification model."""
+class MissiveRecipientApplicationManager(models.Manager):
+    """Manager for the MissiveRecipientApplication model."""
 
     def get_queryset(self):
         qs = super().get_queryset()
-        qs = qs.filter(recipient_support=MissiveSupport.NOTIFICATION)
+        qs = qs.filter(recipient_support=MissiveSupport.APPLICATION)
         return qs

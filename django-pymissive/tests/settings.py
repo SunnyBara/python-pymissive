@@ -93,17 +93,7 @@ if NGROK_PUBLIC_URL:
     MISSIVE_SCHEME = url_data.scheme
 
 
-SCALEWAY_SNS_ACCESS_KEY = "PfJEDJrCiff1FKzClXnF"
-SCALEWAY_SNS_SECRET_KEY = (
-    "fckt8EDSXXG5VOrQpWKDlwCtTuHleANDdE7kYIfWwXHcl70UEbWjmC5Q6QQ7q2l1"
-)
-SNS_ACCESS_KEY = "PfJEDJrCiff1FKzClXnF"
-SNS_SECRET_KEY = "fckt8EDSXXG5VOrQpWKDlwCtTuHleANDdE7kYIfWwXHcl70UEbWjmC5Q6QQ7q2l1"
 
-MISSIVE_SCALEWAY_SNS_ACCESS_KEY = "PfJEDJrCiff1FKzClXnF"
-MISSIVE_SCALEWAY_SNS_SECRET_KEY = (
-    "fckt8EDSXXG5VOrQpWKDlwCtTuHleANDdE7kYIfWwXHcl70UEbWjmC5Q6QQ7q2l1"
-)
 
 try:
     from django_json_widget.widgets import JSONEditorWidget
@@ -137,3 +127,30 @@ except ImportError:
 MISSIVE_AUTHENTICATED_ACKNOWLEDGEMENT = False
 MISSIVE_SIGNED_ACKNOWLEDGEMENT = False
 MISSIVE_QUALIFIED_ACKNOWLEDGEMENT = False
+
+# PYMISSIVE_SAVE_UNTREATED_EVENTS = True  # Save events that could not be processed (default: False)
+
+PROVIDERKIT_PROVIDERS_CONFIG = {
+    "brevo": {
+        "EMAIL_API_KEY": os.getenv("BREVO_EMAIL_API_KEY"),
+        "SMS_API_KEY": os.getenv("BREVO_SMS_API_KEY"),
+    },
+    "scaleway": {
+        "ACCESS_KEY": os.getenv("SCALEWAY_ACCESS_KEY"),
+        "SECRET_ACCESS_KEY": os.getenv("SCALEWAY_SECRET_ACCESS_KEY"),
+        "PROJECT_ID": os.getenv("SCALEWAY_PROJECT_ID"),
+        "SNS_ACCESS_KEY": os.getenv("SCALEWAY_SNS_ACCESS_KEY"),
+        "SNS_SECRET_KEY": os.getenv("SCALEWAY_SNS_SECRET_KEY"),
+        "SUFFIX_SENDER_EMAIL": os.getenv("SCALEWAY_SUFFIX_SENDER_EMAIL"),
+    },
+    "maileva": {
+        "USERNAME": os.getenv("MAILEVA_USERNAME"),
+        "PASSWORD": os.getenv("MAILEVA_PASSWORD"),
+        "CLIENTID": os.getenv("MAILEVA_CLIENTID"),
+        "SECRET": os.getenv("MAILEVA_SECRET"),
+        "SANDBOX": os.getenv("MAILEVA_SANDBOX", True),
+    },
+    "partner": {
+        "SMS_API_KEY": os.getenv("PARTNER_SMS_API_KEY"),
+    }
+}

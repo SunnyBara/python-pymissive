@@ -2,35 +2,31 @@
 
 from django.contrib import admin
 from django.utils.translation import gettext_lazy as _
-from django_boosted import AdminBoostModel, AdminBoostFormat
+from django_boosted import AdminBoostModel
 from urllib.parse import unquote
+
 from django.contrib import messages
-from django.shortcuts import redirect
-from django.urls import reverse
-from django.utils.safestring import mark_safe
 
 from ..models.event import MissiveEvent
 
+class UntreatedListFilter(admin.SimpleListFilter):
+    """Custom filter for untreated events."""
 
-class BaseMissiveEventAdmin(AdminBoostFormat):
-    """Base admin for missive event model."""
+    title = _("Untreated")
+    parameter_name = "untreated"
 
-    def billing_display(self, obj):
-        """Display billing amount and estimate amount."""
-        if not obj.user_action:
-            return "-"
-        tpl = self.boolean_icon_html(obj.is_billed)
-        if obj.billing_amount is not None:
-            tpl += "&nbsp;"
-            tpl += self.format_label(f"{obj.billing_amount:.3f}", size="small", label_type="success" if obj.is_billed else "warning")
-        if obj.estimate_amount is not None:
-            tpl += "&nbsp;"
-            tpl += self.format_label(f"{obj.estimate_amount:.3f}", size="small", label_type="info")
-        return mark_safe(tpl)
-    billing_display.short_description = _("Billing Amount")
+    def lookups(self, request, model_admin):
+        return [("1", _("Yes")), ("0", _("No"))]
+
+    def queryset(self, request, queryset):
+        if self.value() == "1":
+            return queryset.filter(missive__isnull=True)
+        if self.value() == "0":
+            return queryset.filter(missive__isnull=False)
+        return queryset
 
 
-class MissiveEventInline(admin.TabularInline, BaseMissiveEventAdmin):
+class MissiveEventInline(admin.TabularInline):
     """Inline for missive events (read-only)."""
 
     model = MissiveEvent
@@ -38,22 +34,18 @@ class MissiveEventInline(admin.TabularInline, BaseMissiveEventAdmin):
     readonly_fields = [
         "missive",
         "recipient",
-        "provider",
         "event",
-        "description",
+        "reason",
         "occurred_at",
-        "user_action",
-        "billing_display",
+        "client_initiated",
     ]
     fields = [
         "missive",
         "recipient",
-        "provider",
         "event",
-        "description",
+        "reason",
         "occurred_at",
-        "user_action",
-        "billing_display",
+        "client_initiated",
     ]
     show_change_link = True
     can_delete = False
@@ -66,25 +58,26 @@ class MissiveEventInline(admin.TabularInline, BaseMissiveEventAdmin):
 
 
 @admin.register(MissiveEvent)
-class MissiveEventAdmin(AdminBoostModel, BaseMissiveEventAdmin):
+class MissiveEventAdmin(AdminBoostModel):
     """Admin for missive event model."""
 
     list_display = [
         "event",
         "missive",
         "recipient",
-        "provider",
+        "missive__provider",
         "occurred_at",
-        "user_action",
-        "billing_display",
+        "client_initiated",
     ]
     list_filter = [
         "event",
-        "provider",
+        "missive__provider",
+        "client_initiated",
+        UntreatedListFilter,
     ]
     search_fields = [
         "event",
-        "description",
+        "reason",
         "missive__subject",
         "recipient__name",
         "recipient__email",
@@ -94,21 +87,18 @@ class MissiveEventAdmin(AdminBoostModel, BaseMissiveEventAdmin):
     readonly_fields = [
         "missive",
         "recipient",
-        "provider",
         "event",
-        "description",
+        "reason",
         "metadata",
         "trace",
         "occurred_at",
-        "user_action",
-        "billing_display",
+        "client_initiated",
         "created_at",
         "updated_at",
     ]
     raw_id_fields = ["missive", "recipient"]
     changeform_actions = {
         "replay": _("Replay"),
-        "set_billed": _("Mark as paid"),
     }
 
     fieldsets = [
@@ -118,9 +108,8 @@ class MissiveEventAdmin(AdminBoostModel, BaseMissiveEventAdmin):
                 "fields": (
                     "missive",
                     "recipient",
-                    "provider",
                     "event",
-                    "description",
+                    "reason",
                 )
             },
         ),
@@ -130,11 +119,7 @@ class MissiveEventAdmin(AdminBoostModel, BaseMissiveEventAdmin):
         """Configure fieldsets for change view."""
         self.add_to_fieldset(
             _("Details"),
-            ["occurred_at", "trace", "user_action", "metadata",],
-        )
-        self.add_to_fieldset(
-            _("Billing"),
-            ["billing_amount", "estimate_amount", "is_billed"],
+            ["occurred_at", "trace", "client_initiated", "metadata",],
         )
         self.add_to_fieldset(_("Comment/Timestamps"), ["comment", "created_at", "updated_at"])
 
@@ -145,7 +130,7 @@ class MissiveEventAdmin(AdminBoostModel, BaseMissiveEventAdmin):
         return False
 
     def has_replay_permission(self, request, obj=None):
-        return obj and obj.pk
+        return obj and obj.pk and obj.can_replay()
 
     def handle_replay(self, request, obj=None):
         """Handle replay of event."""
@@ -153,10 +138,3 @@ class MissiveEventAdmin(AdminBoostModel, BaseMissiveEventAdmin):
         obj = self.get_object(request, obj)
         obj.replay()
         messages.success(request, _("Event replayed successfully."))
-
-    def handle_set_billed(self, request, obj=None):
-        """Handle set billed of event."""
-        obj = unquote(obj)
-        obj = self.get_object(request, obj)
-        obj.set_billed()
-        messages.success(request, _("Billed status updated successfully."))
