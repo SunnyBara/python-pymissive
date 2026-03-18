@@ -27,6 +27,10 @@ from ..managers.attachment import (
 )
 from ..fields import JSONField
 
+# Priority 0 is reserved for the first-document (letter body PDF). Other attachments use 1, 2, 3...
+FIRST_DOCUMENT_PRIORITY = 0
+
+
 def _attachment_upload_to(instance, filename):
     """Return upload path based on attachment class."""
     upload_to = getattr(settings, 'PYMISSIVE_ATTACHMENT_UPLOAD_TO', None)
@@ -74,6 +78,10 @@ class ConfigurableAttachmentStorage(Storage):
         return self._backend._open(name, mode)
 
     def _save(self, name, content, max_length=None):
+        # Override via PYMISSIVE_ATTACHMENT_PATH_MAX_LENGTH; cannot exceed field max_length.
+        effective = getattr(settings, "PYMISSIVE_ATTACHMENT_PATH_MAX_LENGTH", None)
+        if effective is not None:
+            max_length = min(max_length or 2000, effective)
         try:
             return self._backend._save(name, content, max_length=max_length)
         except TypeError:
@@ -159,6 +167,7 @@ class MissiveBaseAttachment(CommentTimestampedModel):
     attachment_file = models.FileField(
         upload_to=_attachment_upload_to,
         storage=ConfigurableAttachmentStorage(),
+        max_length=2000,
         blank=True,
         null=True,
         verbose_name=_("Attachment File"),
@@ -181,7 +190,7 @@ class MissiveBaseAttachment(CommentTimestampedModel):
     priority = models.PositiveIntegerField(
         default=1,
         verbose_name=_("Priority"),
-        help_text=_("Page order (1=first page from letter body, attachments start at 2)"),
+        help_text=_("Page order. 0=first-document (letter body), others use 1, 2, 3... (0 reserved)"),
     )
 
     external_id = models.CharField(
@@ -206,6 +215,12 @@ class MissiveBaseAttachment(CommentTimestampedModel):
         verbose_name = _("Attachment")
         verbose_name_plural = _("Attachments")
         ordering = ["priority",]
+
+    @property
+    def is_first_document(self):
+        """True if this is the first-document (letter body PDF). Reserved for priority 0."""
+        name = getattr(self.attachment_file, "name", None) or ""
+        return "first-document-" in name
 
     @property
     def can_be_modified(self):
@@ -264,19 +279,22 @@ class MissiveBaseAttachment(CommentTimestampedModel):
         return data
 
     def calculate_priority(self):
-        """Return next priority (1 reserved for letter body, attachments start at 2)."""
+        """Return next priority. First-document uses 0; others use 1, 2, 3... (0 is reserved)."""
         from django.db.models import Max
 
-        # Use base model to include all attachment types (regular + virtual) for the same parent
+        if self.is_first_document:
+            return FIRST_DOCUMENT_PRIORITY
         qs = MissiveBaseAttachment.objects
         if self.missive_id:
             qs = qs.filter(missive_id=self.missive_id)
         elif self.campaign_id:
             qs = qs.filter(campaign_id=self.campaign_id)
         else:
-            return 2
-        max_priority = qs.aggregate(Max("priority"))["priority__max"] or 1
-        return max_priority + 1
+            return 1
+        # Exclude first-documents (priority 0) from max; others start at 1
+        qs = qs.exclude(priority=FIRST_DOCUMENT_PRIORITY)
+        max_priority = qs.aggregate(Max("priority"))["priority__max"] or (FIRST_DOCUMENT_PRIORITY)
+        return max(1, max_priority + 1)
 
     def _recalculate_sibling_priorities(self):
         """Reassign sequential priorities (1, 2, 3...) when one attachment's priority changed."""
@@ -291,9 +309,14 @@ class MissiveBaseAttachment(CommentTimestampedModel):
         return self.attachment_file and self.attachment_file.url
 
     def save(self, *args, **kwargs):
-        """Auto-set priority for new attachments. Recalc done in admin save_formset (batch)."""
+        """Auto-set priority for new attachments. First-document=0, others 1+. Recalc in admin save_formset."""
         if not self.pk and (self.missive_id or self.campaign_id):
             self.priority = self.calculate_priority()
+        else:
+            if self.is_first_document:
+                self.priority = FIRST_DOCUMENT_PRIORITY
+            elif self.priority == FIRST_DOCUMENT_PRIORITY:
+                self.priority = 1
         super().save(*args, **kwargs)
 
 class MissiveAttachment(MissiveBaseAttachment):

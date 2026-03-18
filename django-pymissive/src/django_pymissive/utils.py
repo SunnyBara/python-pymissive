@@ -10,12 +10,12 @@ from .models.recipient import MissiveRecipient
 
 def recalculate_attachment_priorities(missive_id=None, campaign_id=None):
     """
-    Reassign sequential priorities (1, 2, 3...) for attachments of a missive or campaign.
+    Reassign priorities: first-document stays at 0, others get 1, 2, 3...
     Use after inline save or when priority changed programmatically.
     """
     if not missive_id and not campaign_id:
         return
-    from .models.attachment import MissiveBaseAttachment
+    from .models.attachment import FIRST_DOCUMENT_PRIORITY, MissiveBaseAttachment
 
     qs = MissiveBaseAttachment.objects
     if missive_id:
@@ -24,9 +24,15 @@ def recalculate_attachment_priorities(missive_id=None, campaign_id=None):
         qs = qs.filter(campaign_id=campaign_id)
     siblings = list(qs.order_by("priority", "id"))
     to_update = []
-    for i, att in enumerate(siblings, start=1):
-        if att.priority != i:
-            att.priority = i
+    next_priority = FIRST_DOCUMENT_PRIORITY
+    for att in siblings:
+        if att.is_first_document:
+            expected = FIRST_DOCUMENT_PRIORITY
+        else:
+            next_priority = max(next_priority + 1, 1)
+            expected = next_priority
+        if att.priority != expected:
+            att.priority = expected
             to_update.append(att)
     if to_update:
         MissiveBaseAttachment.objects.bulk_update(to_update, ["priority"])

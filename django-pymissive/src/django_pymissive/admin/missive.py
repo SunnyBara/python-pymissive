@@ -442,7 +442,7 @@ class MissiveAdmin(AdminBoostModel):
         return (obj and obj.pk and obj.status != MissiveStatus.CANCELLED)
 
     def has_change_permission(self, request, obj=None):
-        return self.is_not_cancelled(obj)
+        return self.is_not_cancelled(obj) and not obj.external_id
 
     def has_prepare_missive_permission(self, request, obj=None):
         return self.is_draft(obj) and self.provider_has_service(obj, "create") and not obj.external_id

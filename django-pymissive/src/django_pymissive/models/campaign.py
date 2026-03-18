@@ -181,7 +181,7 @@ class MissiveCampaign(CommentTimestampedModel):
     class Meta:
         verbose_name = _("Campaign")
         verbose_name_plural = _("Campaigns")
-        ordering = []
+        ordering = ["-created_at", "subject"]
 
     def __str__(self):
         return self.subject

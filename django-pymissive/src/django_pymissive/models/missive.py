@@ -319,6 +319,38 @@ class Missive(CommentTimestampedModel):
     # Campaign suffix by support: address->lre, email->email, phone->phone
     _SUPPORT_TO_CAMPAIGN_SUFFIX = {"address": "lre", "email": "email", "phone": "phone"}
 
+    @classmethod
+    def get_campaign_sourced_fields(cls, support):
+        """Return (missive_attr, lookup_field) for fields that can come from campaign."""
+        support = (support or "").lower()
+        fields = [
+            ("subject", "subject"),
+            ("body_html", "body_html"),
+            ("body_text", "body_text"),
+            ("acknowledgement", "acknowledgement"),
+            ("delivery_mode", "delivery_mode"),
+            ("priority", "priority"),
+            ("sender_name", f"sender_{support}_name"),
+            (f"sender_{support}", f"sender_{support}"),
+            ("reply_to_name", f"reply_to_{support}_name"),
+            (f"reply_to_{support}", f"reply_to_{support}"),
+        ]
+        if support == "phone":
+            fields.append(("body_text", "body_sms"))
+        elif support == "address":
+            fields.append(("body_html", "first_document"))
+        return fields
+
+    @property
+    def campaign_sourced_field_names(self):
+        """Field names that can be sourced from campaign (for set_locally_ifnull / clear)."""
+        fields = self.get_campaign_sourced_fields(self.missive_support)
+        names = []
+        for missive_attr, _ in fields:
+            if missive_attr not in names and hasattr(self, missive_attr):
+                names.append(missive_attr)
+        return names + (["additional_context"] if self.campaign_id else [])
+
     def get_locally_or_campaign_value(self, field, fallback=None):
         """Return value from self, else from campaign (field or field_{suffix})."""
         locally = getattr(self, field, fallback)
@@ -336,6 +368,43 @@ class Missive(CommentTimestampedModel):
             if campaign_val:
                 return campaign_val
         return fallback
+
+    def set_locally_ifnull(self):
+        """Copy campaign values to local fields when null. Preserves content at send time
+        so that if the campaign changes later, already-sent missives keep their content."""
+        if not self.campaign_id:
+            return
+        support = (self.missive_support or "").lower()
+        fields = self.get_campaign_sourced_fields(support)
+
+        updates = []
+        for missive_attr, lookup_field in fields:
+            if not hasattr(self, missive_attr):
+                continue
+            local = getattr(self, missive_attr, None)
+            val = self.get_locally_or_campaign_value(lookup_field, local)
+            if not local and val:
+                setattr(self, missive_attr, val)
+                updates.append(missive_attr)
+
+        if self.campaign.additional_context and not (self.additional_context or {}):
+            self.additional_context = dict(self.campaign.additional_context)
+            updates.append("additional_context")
+
+        if updates:
+            self.save(update_fields=updates)
+
+    def clear_campaign_sourced_fields(self, missive):
+        """Clear campaign-sourced fields on missive so they will be re-filled from campaign at send."""
+        fields_to_clear = missive.campaign_sourced_field_names
+        if not fields_to_clear:
+            return
+        for attr in fields_to_clear:
+            if not hasattr(missive, attr):
+                continue
+            empty = {} if attr == "additional_context" else None
+            setattr(missive, attr, empty)
+        missive.save(update_fields=fields_to_clear)
 
     @property
     def sender(self):
@@ -512,12 +581,11 @@ class Missive(CommentTimestampedModel):
             existing.attachment_file.delete(save=False)
             existing.attachment_file.save(filename, ContentFile(pdf_bytes), save=True)
             return existing
-        # Create then update priority (save() auto-sets priority for new attachments)
         att = MissiveBaseAttachment.objects.create(
             missive=self,
             attachment_type=MissiveAttachmentType.ATTACHMENT,
             attachment_file=ContentFile(pdf_bytes, name=filename),
-            priority=1,
+            priority=0,
             linked=False,
         )
         return att
@@ -628,20 +696,23 @@ class Missive(CommentTimestampedModel):
             raise ValidationError(_("Missive cannot be resend"))
         self.thread_type = MissiveThreadType.HISTORY
         self.save(update_fields=["thread_type"])
-        new_missive = self.duplicate_missive(thread_type=MissiveThreadType.MISSIVE, thread_id=self.thread_id)
+        new_missive = self.duplicate_missive(thread_type=MissiveThreadType.MISSIVE, thread_id=self.thread_id, resend=True)
         new_missive.send_missive()
         return new_missive
 
     def duplicate_attachments(self, new_missive, source_missive):
         """Copy attachments from source_missive to new_missive (excl. first-page)."""
         first_doc_prefix = f"first-document-{source_missive.thread_id}"
-        for attachment in source_missive.to_missiveattachment.exclude(
-            attachment_file__icontains=first_doc_prefix
-        ):
+        attachments = source_missive.attachments.filter(
+            attachment_type=MissiveAttachmentType.ATTACHMENT,
+            missive=source_missive
+        ).exclude(priority=0)
+        for index, attachment in enumerate(attachments):
             attachment.pk = None
             attachment.id = None
             attachment.external_id = None
             attachment.missive = new_missive
+            attachment.priority = index + 1
             attachment.save()
 
     def duplicate_recipients(self, new_missive, source_missive):
@@ -653,9 +724,17 @@ class Missive(CommentTimestampedModel):
             recipient.missive = new_missive
             recipient.save()
 
+    def duplicate_related_objects(self, new_missive, source_missive):
+        """Copy related objects (e.g. contact links) from source_missive to new_missive."""
+        for rel_obj in source_missive.to_missiverelatedobject.all():
+            rel_obj.pk = None
+            rel_obj.id = None
+            rel_obj.missive = new_missive
+            rel_obj.save()
+
     @transaction.atomic
-    def duplicate_missive(self, thread_type=MissiveThreadType.MISSIVE, thread_id=None):
-        """Duplicate the missive with its attachments and recipients."""
+    def duplicate_missive(self, thread_type=MissiveThreadType.MISSIVE, thread_id=None, resend=False):
+        """Duplicate the missive with its attachments, recipients and related objects."""
         # Preserve source before mutating (new_missive = self would overwrite self)
         ModelClass = type(self)
         source = ModelClass.objects.get(pk=self.pk)
@@ -669,6 +748,9 @@ class Missive(CommentTimestampedModel):
         new_missive.save()
         self.duplicate_attachments(new_missive, source)
         self.duplicate_recipients(new_missive, source)
+        self.duplicate_related_objects(new_missive, source)
+        if resend:
+            self.clear_campaign_sourced_fields(new_missive)
         return new_missive
 
     def _update_recipients(self, recipients):
@@ -701,6 +783,7 @@ class Missive(CommentTimestampedModel):
         """Send the missive."""
         if not self.can_send():
             raise ValidationError(_("Missive cannot be sent"))
+        self.set_locally_ifnull()
         self.status = MissiveStatus.PROCESSING
         occurred_at = timezone.now()
         response = self.call_provider_service("send", **self.get_serialized_data())
@@ -792,7 +875,7 @@ class Missive(CommentTimestampedModel):
         if not hasattr(provider, service_name):
             return []
         return provider.call_service_formatted(
-            service_name, **self.get_serialized_data()
+            service_name, **self.get_serialized_data(attachments=False)
         )
 
     def download_proof(self, **kwargs):
@@ -868,7 +951,7 @@ class Missive(CommentTimestampedModel):
     def clean_support_address(self):
         """Clean the missive for address support."""
         has_body_missive = (self.body_html or self.to_missiveattachment.all().exists())
-        has_body_campaign = (self.campaign and self.campaign.to_campaigndocument.exists())
+        has_body_campaign = (self.campaign and (self.campaign.first_document or self.campaign.to_campaigndocument.exists()))
         if not has_body_missive and not has_body_campaign:
             raise ValidationError({
                 "body_html": _("Body or attachments are required (in missive or campaign)"),

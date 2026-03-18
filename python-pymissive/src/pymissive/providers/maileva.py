@@ -528,6 +528,8 @@ class MailevaProvider(MissiveProviderBase):
 
     def get_billings_lre(self, **kwargs: Any) -> list[dict[str, Any]]:
         """Fetch invoice from Maileva billing API (user_reference = custom_id from sending)."""
+        if self.is_mode_sandbox():
+            return []
         self.is_acknowledgement_of_receipt(**kwargs)
         external_id = kwargs.get("external_id")
         detail = self._detail_lre(external_id)
