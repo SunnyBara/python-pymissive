@@ -47,11 +47,12 @@ class BrevoAPIProvider(MissiveProviderBase):
         "blocked": "blocked",
         "spam": "spam",
         "delivered": "delivered",
-        "click": "click",
+        "click": "clicked",
         "clicks": "clicked",
         "invalid": "invalid",
         "deferred": "deferred",
         "opened": "opened",
+        "loadedByProxy": "delivered",
     }
     events_exclude = ["requests", "hard_bounce", "soft_bounce", "clicks"]
 
