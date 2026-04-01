@@ -35,6 +35,12 @@ from ..managers import (
 )
 from ..models.base import CommentTimestampedModel
 from ..fields import RichTextField, JSONField
+from ..dispatch_signals import (
+    missive_post_duplicate,
+    missive_post_send,
+    missive_pre_duplicate,
+    missive_pre_send,
+)
 from ..utils import get_base_url, build_webhook_url, get_default_domain, get_default_scheme
 from django.core import signing
 from django.core.files.base import ContentFile
@@ -697,7 +703,7 @@ class Missive(CommentTimestampedModel):
         self.thread_type = MissiveThreadType.HISTORY
         self.save(update_fields=["thread_type"])
         new_missive = self.duplicate_missive(thread_type=MissiveThreadType.MISSIVE, thread_id=self.thread_id, resend=True)
-        new_missive.send_missive()
+        new_missive.send_missive(old_missive=self)
         return new_missive
 
     def duplicate_attachments(self, new_missive, source_missive):
@@ -738,6 +744,13 @@ class Missive(CommentTimestampedModel):
         # Preserve source before mutating (new_missive = self would overwrite self)
         ModelClass = type(self)
         source = ModelClass.objects.get(pk=self.pk)
+        missive_pre_duplicate.send(
+            sender=ModelClass,
+            source_missive=source,
+            resend=resend,
+            thread_type=thread_type,
+            thread_id=thread_id,
+        )
         new_missive = ModelClass.objects.get(pk=self.pk)
         new_missive.pk = None
         new_missive.id = None
@@ -751,6 +764,12 @@ class Missive(CommentTimestampedModel):
         self.duplicate_related_objects(new_missive, source)
         if resend:
             self.clear_campaign_sourced_fields(new_missive)
+        missive_post_duplicate.send(
+            sender=ModelClass,
+            source_missive=source,
+            new_missive=new_missive,
+            resend=resend,
+        )
         return new_missive
 
     def _update_recipients(self, recipients):
@@ -779,10 +798,15 @@ class Missive(CommentTimestampedModel):
         response["client_initiated"] = True
         self._update_recipients(response.get("recipients", []))
 
-    def send_missive(self):
-        """Send the missive."""
+    def send_missive(self, *, old_missive=None):
+        """Send the missive.
+
+        :param old_missive: When sending a duplicate after a resend, pass the previous missive
+            row (typically HISTORY). None for a normal first send.
+        """
         if not self.can_send():
             raise ValidationError(_("Missive cannot be sent"))
+        missive_pre_send.send(sender=self.__class__, missive=self, old_missive=old_missive)
         self.set_locally_ifnull()
         self.status = MissiveStatus.PROCESSING
         occurred_at = timezone.now()
@@ -813,6 +837,8 @@ class Missive(CommentTimestampedModel):
                 client_initiated=True,
                 occurred_at=occurred_at,
             )
+        self.refresh_from_db()
+        missive_post_send.send(sender=self.__class__, missive=self, old_missive=old_missive)
 
     def handle_events(self, events: list | dict):
         from ..events import handle_events

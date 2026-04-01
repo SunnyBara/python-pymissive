@@ -42,6 +42,8 @@ class BrevoAPIProvider(MissiveProviderBase):
         "sent": "sent",
         "hardBounce": "hard_bounce",
         "softBounce": "soft_bounce",
+        "hardBounces": "hard_bounce",
+        "softBounces": "soft_bounce",
         "hard_bounce": "hard_bounce",
         "soft_bounce": "soft_bounce",
         "blocked": "blocked",
@@ -54,7 +56,14 @@ class BrevoAPIProvider(MissiveProviderBase):
         "opened": "opened",
         "loadedByProxy": "delivered",
     }
-    events_exclude = ["requests", "hard_bounce", "soft_bounce", "clicks"]
+    events_exclude = [
+        "requests",
+        "hard_bounce",
+        "soft_bounce",
+        "clicks",
+        "hardBounces",
+        "softBounces",
+    ]
 
     #########################################################
     # Initialization
