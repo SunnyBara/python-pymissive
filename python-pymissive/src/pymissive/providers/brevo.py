@@ -241,18 +241,39 @@ class BrevoAPIProvider(MissiveProviderBase):
         cc = kwargs.get("cc", [])
         bcc = kwargs.get("bcc", [])
         attachments = self._build_attachments(kwargs.get("attachments", []))
-        send_kwargs: dict[str, Any] = {
-            "subject": kwargs["subject"],
-            "sender": SendTransacEmailRequestSender(email=sender["email"], name=sender.get("name", "")),
-            "to": [
-                SendTransacEmailRequestToItem(email=r["email"], name=r.get("name", ""))
-                for r in recipients
-            ],
-        }
-        if kwargs.get("body_html"):
-            send_kwargs["html_content"] = kwargs["body_html"]
-        if kwargs.get("body_text"):
-            send_kwargs["text_content"] = kwargs["body_text"]
+
+        template_id = kwargs.get('template_id')
+        if template_id:
+            send_kwargs: dict[str, Any] = {
+                'template_id': template_id,
+                'to': [
+                    SendTransacEmailRequestToItem(
+                        email=r['email'], name=r.get('name', '')
+                    )
+                    for r in recipients
+                ],
+            }
+            if kwargs.get('params'):
+                send_kwargs['params'] = kwargs['params']
+        else:
+            send_kwargs = {
+                'subject': kwargs['subject'],
+                'sender': SendTransacEmailRequestSender(
+                    email=sender['email'], name=sender.get('name', '')
+                ),
+                'to': [
+                    SendTransacEmailRequestToItem(
+                        email=r['email'], name=r.get('name', '')
+                    )
+                    for r in recipients
+                ],
+            }
+            if kwargs.get('body_html'):
+                send_kwargs['html_content'] = kwargs['body_html']
+            if kwargs.get('body_text'):
+                send_kwargs['text_content'] = kwargs['body_text']
+
+
         if reply_to:
             send_kwargs["reply_to"] = SendTransacEmailRequestReplyTo(email=reply_to["email"], name=reply_to.get("name", ""))
         if cc:

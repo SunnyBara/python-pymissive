@@ -524,6 +524,8 @@ class Missive(CommentTimestampedModel):
         return self.recipients.filter(recipient_type=MissiveRecipientType.RECIPIENT).exists()
 
     def check_email(self):
+        if self.additional_config.get("use_provider_template", False):
+            return self.check_recipients()
         body_html = self.get_locally_or_campaign_value("body_html")
         body_text = self.get_locally_or_campaign_value("body_text")
         subject = self.get_locally_or_campaign_value("subject")
@@ -957,6 +959,8 @@ class Missive(CommentTimestampedModel):
 
     def clean_support_email(self):
         """Clean the missive for email support."""
+        if self.additional_config.get("use_provider_template", False):
+            return True
         has_body_missive = (self.body_html or self.body_text)
         has_body_campaign = (self.campaign and (self.campaign.body_html or self.campaign.body_text))
         if not has_body_missive and not has_body_campaign:
