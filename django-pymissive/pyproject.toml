@@ -59,6 +59,11 @@ brevo = [
 pdf = [
     "weasyprint>=60.0",
 ]
+test = [
+    "pytest>=8",
+    "python-dotenv",
+]
+
 
 [project.urls]
 Homepage = "https://github.com/octolo/python-missive"
@@ -84,9 +89,3 @@ ignore = ["migrations"]
 
 [tool.django-stubs]
 django_settings_module = "tests.settings"
-
-[project.optional-dependencies]
-test = [
-    "pytest>=8",
-    "python-dotenv",
-]
