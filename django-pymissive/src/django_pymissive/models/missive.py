@@ -1026,7 +1026,6 @@ class Missive(CommentTimestampedModel):
         if hasattr(self, clean_by_support):
             getattr(self, clean_by_support)()
 
-<<<<<<< HEAD
     def clean_subject(self):
         if not self.subject and not self.campaign:
             raise ValidationError({
@@ -1054,8 +1053,6 @@ class Missive(CommentTimestampedModel):
                 "body_text": _("Body text is required (in missive or campaign)"),
             })
 
-=======
->>>>>>> 4e28e9c (Release pymissive and django-pymissive 1.0.9)
     def clean_support_address(self):
         """Extra validation for address (LRE) missives: body_html or attachments."""
         has_body = self.get_locally_or_campaign_value("body_html")
